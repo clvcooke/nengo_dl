@@ -781,6 +781,12 @@ def create_signals(sigs, plan, float_type, minibatch_size):
         if initial_value.shape != shape:
             initial_value = np.resize(initial_value, shape)
 
+        if sig.minibatched:
+            # duplicate along minibatch dimension
+            initial_value = np.tile(
+                initial_value[..., None],
+                tuple(1 for _ in shape) + (minibatch_size,))
+
         if key in base_arrays:
             base_arrays[key] = np.concatenate(
                 (base_arrays[key], initial_value), axis=0)

@@ -59,6 +59,10 @@ class TensorSignal(object):
         return self.key[2]
 
     @property
+    def minibatched(self):
+        return not self.trainable
+
+    @property
     def shape(self):
         if self.display_shape is None:
             return (len(self.indices),) + self.base_shape[1:]
@@ -162,11 +166,14 @@ class SignalDict(object):
         floating point precision used in signals
     dt : float
         simulation timestep
+    minibatch_size : int
+        number of items in each minibatch
     """
 
-    def __init__(self, sig_map, dtype, dt):
+    def __init__(self, sig_map, dtype, dt, minibatch_size):
         self.dtype = dtype
         self.sig_map = sig_map
+        self.minibatch_size = minibatch_size
 
         # create this constant once here so we don't end up creating a new
         # dt constant in each operator
@@ -195,6 +202,8 @@ class SignalDict(object):
 
         # undo any reshaping that has happened relative to the base array
         dst_shape = (val.get_shape().as_list()[0],) + dst.base_shape[1:]
+        if dst.minibatched:
+            dst_shape += (self.minibatch_size,)
         if val.get_shape().ndims != len(dst_shape):
             val = tf.reshape(val, dst_shape)
 
@@ -259,10 +268,13 @@ class SignalDict(object):
 
         # reshape the data according to the shape set in `src`, if there is
         # one, otherwise keep the shape of the base array
+        src_shape = src.shape
+        if src.minibatched:
+            src_shape += (self.minibatch_size,)
         if src.display_shape is not None:
-            result = tf.reshape(result, src.shape)
+            result = tf.reshape(result, src_shape)
         else:
-            result.set_shape(src.shape)
+            result.set_shape(src_shape)
 
         # whenever we read from an array we use this to mark it as "read"
         # (so that any future writes to the array will be scheduled after
@@ -333,11 +345,6 @@ class SignalDict(object):
 def mark_signals(model):
     # TODO: documentation/tests
 
-    # mark everything as not trainable by default
-    for op in model.operators:
-        for sig in op.all_signals:
-            sig.trainable = False
-
     if model.toplevel is None:
         warnings.warn("No top-level network in model")
     else:
@@ -353,3 +360,10 @@ def mark_signals(model):
             # TODO: should we disable training on connections to learning
             # rules?
             model.sig[conn]["weights"].trainable = True
+
+    # mark everything as not trainable by default
+    for op in model.operators:
+        for sig in op.all_signals:
+            if not hasattr(sig, "trainable"):
+                sig.trainable = False
+            sig.minibatched = not sig.trainable
