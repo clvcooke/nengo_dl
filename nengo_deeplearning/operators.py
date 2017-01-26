@@ -62,8 +62,15 @@ class SlicedCopyBuilder(OpBuilder):
 
         self.mode = "inc" if getattr(ops[0], "inc", False) else "update"
 
-        self.src_data = signals.combine(srcs)
+        self.src_data = signals.combine(srcs, load_indices=False)
         self.dst_data = signals.combine(dsts)
+
+        if not self.src_data.minibatched and self.dst_data.minibatched:
+            # broadcast indices so that the un-minibatched src data gets
+            # copied to each minibatch dimension in dst
+            self.src_data = self.src_data.broadcast(-1, signals.minibatch_size)
+
+        self.src_data.load_indices()
 
     def build_step(self, signals):
         signals.scatter(self.dst_data, signals.gather(self.src_data),
@@ -163,6 +170,12 @@ class DotIncBuilder(OpBuilder):
 
             self.reduce = False
 
+        # add broadcast dimension for minibatch, if needed
+        if not self.A_data.minibatched and self.X_data.minibatched:
+            self.A_data = self.A_data.reshape(self.A_data.shape + (1,))
+        elif self.A_data.minibatched and not self.X_data.minibatched:
+            self.X_data = self.X_data.reshape(self.X_data.shape + (1,))
+
         self.A_data.load_indices()
         self.X_data.load_indices()
 
@@ -177,7 +190,6 @@ class DotIncBuilder(OpBuilder):
 
         if self.reduce:
             dot = tf.reduce_sum(dot, axis=-2)
-
         dot = tf.reshape(dot, self.Y_data.shape + (signals.minibatch_size,))
 
         signals.scatter(self.Y_data, dot, mode="inc")
@@ -194,6 +206,7 @@ class SimPyFuncBuilder(OpBuilder):
             print("fn", [op.fn for op in ops])
 
         self.time_input = [] if ops[0].t is None else signals.time
+        self.input_data = signals.combine([op.x for op in ops])
 
         if ops[0].output is not None:
             self.output_data = signals.combine([op.output for op in ops])
@@ -202,71 +215,55 @@ class SimPyFuncBuilder(OpBuilder):
             self.output_data = None
             self.output_dtype = signals.dtype
 
-        if ops[0].x is None:
-            # this function doesn't require simulation input, so we'll run it
-            # offline and then feed in the values at runtime
-            self.fns = [op.fn for op in ops]
-            self.placeholders = [tf.placeholder(op.output.shape) for op in ops]
-            self.input_data = tf.concat(1, self.placeholders)
-        else:
-            self.placeholders = None
-            self.input_data = (None if ops[0].x is None else
-                               signals.combine([op.x for op in ops]))
+        def merged_func(time, inputs):
+            outputs = []
+            offset = 0
+            for i, op in enumerate(ops):
+                if op.output is None:
+                    func = op.fn
+                else:
+                    func = utils.align_func(
+                        op.output.shape, self.output_dtype)(op.fn)
 
-            def merged_func(time, inputs):
-                outputs = []
-                offset = 0
-                for i, op in enumerate(ops):
-                    if op.output is None:
-                        func = op.fn
+                func_input = inputs[offset:offset + op.x.shape[0]]
+                offset += op.x.shape[0]
+
+                mini_out = []
+                for j in range(signals.minibatch_size):
+                    if op.t is None:
+                        func_out = func(func_input[..., j])
                     else:
-                        func = utils.align_func(
-                            op.output.shape, self.output_dtype)(op.fn)
+                        func_out = func(time, func_input[..., j])
 
-                    output = []
-                    for j in range(signals.minibatch_size):
-                        if op.x is None:
-                            output += [func(time)]
-                        else:
-                            func_input = inputs[
-                                         offset:offset + op.x.shape[0]][..., j]
-                            offset += op.x.shape[0]
-                            if op.t is None:
-                                output += [func(func_input)]
-                            else:
-                                output += [func(time, func_input)]
+                    if op.output is None:
+                        # just return time as a noop (since we need to
+                        # return something)
+                        func_out = time
+                    mini_out += [func_out]
+                outputs += [np.stack(mini_out, axis=-1)]
 
-                        if op.output is None:
-                            # just return time as a noop (since we need to
-                            # return something)
-                            output += [[time]]
+            return np.concatenate(outputs, axis=0)
 
-                    outputs += [np.stack(output, axis=-1)]
-                return np.concatenate(outputs, axis=0)
-
-            self.merged_func = merged_func
-            self.merged_func.__name__ == "_".join(
-                [utils.function_name(op.fn) for op in ops])
-            self.output_shape = (len(ops) if self.output_data is None else
-                                 self.output_data.shape)
-            self.output_shape += (signals.minibatch_size,)
+        self.merged_func = merged_func
+        self.merged_func.__name__ == "_".join(
+            [utils.function_name(op.fn) for op in ops])
+        self.output_shape = (len(ops) if self.output_data is None else
+                             self.output_data.shape)
+        self.output_shape += (signals.minibatch_size,)
 
     def build_step(self, signals):
-        if self.placeholders is not None:
-            signals.scatter(self.output_data, self.input_data[self.step - 1])
-        else:
-            inputs = ([] if self.input_data is None
-                      else signals.gather(self.input_data))
+        inputs = ([] if self.input_data is None
+                  else signals.gather(self.input_data))
 
-            node_outputs = tf.py_func(
-                self.merged_func, [self.time_input, inputs], self.output_dtype,
-                name=self.merged_func.__name__)
-            node_outputs.set_shape(self.output_shape)
+        node_outputs = tf.py_func(
+            self.merged_func, [self.time_input, inputs], self.output_dtype,
+            name=self.merged_func.__name__)
+        node_outputs.set_shape(self.output_shape)
 
-            if self.output_data is not None:
-                signals.scatter(self.output_data, node_outputs)
+        if self.output_data is not None:
+            signals.scatter(self.output_data, node_outputs)
 
-            # note: we only need to run the node for side effects, not the
-            # assignment operator. if the result of the assignment is actually
-            # used anywhere, then it will be run as part of the normal graph.
-            return node_outputs
+        # note: we only need to run the node for side effects, not the
+        # assignment operator. if the result of the assignment is actually
+        # used anywhere, then it will be run as part of the normal graph.
+        return node_outputs

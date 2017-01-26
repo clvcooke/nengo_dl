@@ -122,23 +122,22 @@ class TensorSignal(object):
         else:
             self.as_slice = None
 
-    # def broadcast(self, axis, length):
-    #     assert self.in_tf
-    #     assert axis in (0, 1)
-    #
-    #     indices = self.indices
-    #     indices = tf.stack([indices] * length, axis=axis)
-    #     indices = tf.reshape(indices, (-1,))
-    #
-    #     if axis == 1:
-    #         display_shape = self.shape + (length,)
-    #     else:
-    #         display_shape = (length,) + self.shape
-    #
-    #     return TensorSignal(
-    #         indices, self.key, display_shape=display_shape,
-    #         label=self.label + ".broadcast(%d, %d)" % (axis, length))
-    #
+    def broadcast(self, axis, length):
+        assert axis in (0, -1)
+
+        indices = self.indices
+        indices = np.stack([indices] * length, axis=axis)
+        indices = np.reshape(indices, (-1,))
+
+        if axis == -1:
+            display_shape = self.shape + (length,)
+        else:
+            display_shape = (length,) + self.shape
+
+        return TensorSignal(
+            indices, self.key, display_shape=display_shape,
+            label=self.label + ".broadcast(%d, %d)" % (axis, length))
+
     # def tile(self, length):
     #     assert self.in_tf
     #
@@ -200,8 +199,8 @@ class SignalDict(object):
             raise BuildError("Tensor detected with wrong dtype (%s), should "
                              "be %s." % (val.dtype.base_dtype, self.dtype))
 
-        # undo any reshaping that has happened relative to the base array
-        dst_shape = (val.get_shape().as_list()[0],) + dst.base_shape[1:]
+        # align val shape with dst base shape
+        dst_shape = (dst.shape[0],) + dst.base_shape[1:]
         if dst.minibatched:
             dst_shape += (self.minibatch_size,)
         if val.get_shape().ndims != len(dst_shape):
