@@ -168,16 +168,16 @@ def test_mergeable():
                      [SimProcess(Alpha(0), None, None, DummySignal())])
 
 
-@pytest.mark.parametrize("planner", [greedy_planner, tree_planner])
-def test_planner_timeupdate(planner):
-    # test TimeUpdate exclusion
-    input0 = DummySignal()
-    input1 = DummySignal()
-    output0 = DummySignal()
-    operators = [TimeUpdate(input0, input1), SlicedCopy(input0, output0)]
-    plan = planner(operators)
-    assert len(plan) == 1
-    assert type(plan[0][0]) == SlicedCopy
+# @pytest.mark.parametrize("planner", [greedy_planner, tree_planner])
+# def test_planner_timeupdate(planner):
+#     # test TimeUpdate exclusion
+#     input0 = DummySignal()
+#     input1 = DummySignal()
+#     output0 = DummySignal()
+#     operators = [TimeUpdate(input0, input1), SlicedCopy(input0, output0)]
+#     plan = planner(operators)
+#     assert len(plan) == 1
+#     assert type(plan[0][0]) == SlicedCopy
 
 
 @pytest.mark.parametrize("planner", [greedy_planner, tree_planner])

@@ -1,7 +1,7 @@
 from collections import OrderedDict
 import copy
 
-from nengo.builder.operator import (TimeUpdate, SimPyFunc, SlicedCopy, DotInc,
+from nengo.builder.operator import (SimPyFunc, SlicedCopy, DotInc,
                                     ElementwiseInc, Copy)
 from nengo.builder.neurons import SimNeurons
 from nengo.builder.processes import SimProcess
@@ -372,7 +372,7 @@ def order_signals(plan, n_passes=10):
 
     if len(read_blocks) == 0:
         # no reads, so nothing to reorder
-        return plan, all_signals
+        return all_signals, plan
 
     if DEBUG:
         print("all signals")

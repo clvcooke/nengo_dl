@@ -47,7 +47,7 @@ class SimProcessBuilder(OpBuilder):
             # build the step function for each process
             step_fs = [
                 [op.process.make_step(
-                    op.input.shape if op.input is not None else (0,), 
+                    op.input.shape if op.input is not None else (0,),
                     op.output.shape, signals.dt.dt_val,
                     op.process.get_rng(rng))
                  for _ in range(signals.minibatch_size)] for op in ops]

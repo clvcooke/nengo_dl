@@ -205,7 +205,7 @@ class SimPyFuncBuilder(OpBuilder):
             print("x", [op.x for op in ops])
             print("fn", [op.fn for op in ops])
 
-        self.time_input = [] if ops[0].t is None else signals.time
+        self.time_input = ops[0].t is not None
         self.input_data = signals.combine([op.x for op in ops])
 
         if ops[0].output is not None:
@@ -247,16 +247,17 @@ class SimPyFuncBuilder(OpBuilder):
         self.merged_func = merged_func
         self.merged_func.__name__ == "_".join(
             [utils.function_name(op.fn) for op in ops])
-        self.output_shape = (len(ops) if self.output_data is None else
+        self.output_shape = ((len(ops),) if self.output_data is None else
                              self.output_data.shape)
         self.output_shape += (signals.minibatch_size,)
 
     def build_step(self, signals):
+        time = signals.time if self.time_input else []
         inputs = ([] if self.input_data is None
                   else signals.gather(self.input_data))
 
         node_outputs = tf.py_func(
-            self.merged_func, [self.time_input, inputs], self.output_dtype,
+            self.merged_func, [time, inputs], self.output_dtype,
             name=self.merged_func.__name__)
         node_outputs.set_shape(self.output_shape)
 

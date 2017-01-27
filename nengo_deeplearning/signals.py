@@ -360,6 +360,24 @@ def mark_signals(model):
             # rules?
             model.sig[conn]["weights"].trainable = True
 
+            # parameters can't be modified by an online Nengo learning rule
+            # and offline training at the same time. (it is possible in theory,
+            # but it complicates things a lot and is probably not a common
+            # use case).
+            rule = conn.learning_rule
+            if rule is not None:
+                if isinstance(rule, dict):
+                    rule = list(rule.values())
+                elif not isinstance(rule, list):
+                    rule = [rule]
+                for r in rule:
+                    if r.modifies == "weights" or r.modifies == "decoders":
+                        model.sig[conn]["weights"].trainable = False
+                    elif r.modifies == "encoders":
+                        model.sig[conn.post_obj]["encoders"].trainable = False
+                    else:
+                        raise NotImplementedError
+
     # mark everything as not trainable by default
     for op in model.operators:
         for sig in op.all_signals:
