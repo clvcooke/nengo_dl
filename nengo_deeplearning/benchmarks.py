@@ -153,15 +153,20 @@ def compare_backends(raw=False):
                             if backend == nengo_dl:
                                 kwargs = {"step_blocks": 50,
                                           "unroll_simulation": True,
+                                          "minibatch_size": 100,
                                           # "device": "/cpu:0"
                                           }
                             else:
-                                kwargs = {}
+                                kwargs = {"progress_bar": None}
                             try:
+                                reps = 1 if backend == nengo_dl else 50
                                 with backend.Simulator(None, model=model,
                                                        **kwargs) as sim:
                                     start = time.time()
-                                    sim.run(5.0)
+                                    for r in range(reps):
+                                        if r > 0:
+                                            sim.reset()
+                                        sim.run(1.0)
                                     data[i, j, k, l, m] = time.time() - start
                                     print("time", data[i, j, k, l, m])
                             except Exception as e:
