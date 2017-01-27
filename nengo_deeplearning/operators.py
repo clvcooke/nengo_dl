@@ -77,12 +77,11 @@ class SlicedCopyBuilder(OpBuilder):
                         mode=self.mode)
 
 
-@Builder.register(DotInc)
 @Builder.register(ElementwiseInc)
-class DotIncBuilder(OpBuilder):
+class ElementwiseIncBuilder(OpBuilder):
     def __init__(self, ops, signals):
         if DEBUG:
-            print("dot_inc"), len(ops)
+            print("elementwise_inc"), len(ops)
             print("\n".join([str(x) for x in ops]))
             print("dst", [op.Y for op in ops])
             print("A", [op.A for op in ops])
@@ -90,85 +89,31 @@ class DotIncBuilder(OpBuilder):
 
         n_ops = len(ops)
 
+        self.Y_data = signals.combine([op.Y for op in ops])
+
         # group all the A's and X's
-        # A = [signals.sig_map[op.A] for op in ops]
-        # X = [signals.sig_map[op.X] for op in ops]
         A_data = signals.combine([op.A for op in ops], load_indices=False)
         X_data = signals.combine([op.X for op in ops], load_indices=False)
 
-        # if DEBUG:
-        #     print("A tensors", [str(a) for a in A])
-        #     print("X tensors", [str(x) for x in X])
+        # if A_data.ndim == 2 and X_data.ndim == 2:
+        #     # vector-vector outer product
+        #     assert all([op.A.shape[1] == 1 for op in ops])
+        #     assert all([op.X.shape[0] == 1 for op in ops])
+        #
+        #     self.A_data = A_data.reshape((n_ops, -1, 1))
+        #     self.X_data = X_data.reshape((n_ops, 1, -1))
+        # else:
+        # in all other cases we're just doing elementwise multiplication
 
-        self.Y_data = signals.combine([op.Y for op in ops])
+        # separate data from each op along the first dimension
+        self.A_data = A_data.reshape((n_ops, -1) + A_data.shape[1:])
+        self.X_data = X_data.reshape((n_ops, -1) + X_data.shape[1:])
 
-        if A_data.ndim == 2 and X_data.ndim == 2:
-            # vector-vector outer product
-            assert all([op.A.shape[1] == 1 for op in ops])
-            assert all([op.X.shape[0] == 1 for op in ops])
-
-            # for i in range(len(ops)):
-            #     A[i] = A[i].broadcast(1, X[i].shape[1])
-            #     X[i] = X[i].broadcast(0, A[i].shape[0])
-            #
-            # self.A_data = signals.combine(A)
-            # self.X_data = signals.combine(X)
-
-            self.A_data = A_data.reshape((n_ops, -1, 1))
-            self.X_data = X_data.reshape((n_ops, 1, -1))
-
-            self.reduce = False
-        elif A_data.ndim == 2 and X_data.ndim == 1:
-            # matrix-vector inner product
-
-            # for i in range(len(ops)):
-            #     X[i] = X[i].broadcast(0, A[i].shape[0])
-            #
-            # self.A_data = signals.combine(A)
-            # self.X_data = signals.combine(X)
-
-            self.A_data = A_data.reshape((n_ops, -1, A_data.shape[1]))
-            self.X_data = X_data.reshape((n_ops, 1, -1))
-
-            self.reduce = True
-        else:
-            # in all other cases we're just doing elementwise multiplication
-            # add empty dimensions for broadcasting
-
-            # for i in range(len(ops)):
-            #     # if the first axes don't match it's because we're
-            #     # multiplying a vector by a scalar (interpreted as a length 1
-            #     # vector), so we repeat the scalar
-            #     if A[i].shape[0] < X[i].shape[0]:
-            #         # A[i] = A[i].broadcast(1, X[i].shape[0] // A[i].shape[0])
-            #         assert A[i].shape[0] == 1
-            #         A[i] = A[i].tile(X[i].shape[0] // A[i].shape[0])
-            #     elif X[i].shape[0] < A[i].shape[0]:
-            #         # X[i] = X[i].broadcast(1, A[i].shape[0] // X[i].shape[0])
-            #         assert X[i].shape[0] == 1
-            #         X[i] = X[i].tile(A[i].shape[0] // X[i].shape[0])
-            #
-            #     # add empty broadcasting dimensions for any axes > 0
-            #     while A[i].ndim < X[i].ndim:
-            #         A[i] = A[i].broadcast(1, X[i].shape[A[i].ndim])
-            #     while X[i].ndim < A[i].ndim:
-            #         X[i] = X[i].broadcast(1, A[i].shape[X[i].ndim])
-            #
-            #     assert A[i].shape == X[i].shape
-            #
-            # self.A_data = signals.combine(A)
-            # self.X_data = signals.combine(X)
-
-            self.A_data = A_data.reshape((n_ops, -1) + A_data.shape[1:])
-            self.X_data = X_data.reshape((n_ops, -1) + X_data.shape[1:])
-
-            # add empty dimensions for broadcasting
-            while self.A_data.ndim < self.X_data.ndim:
-                self.A_data = self.A_data.reshape(self.A_data.shape + (1,))
-            while self.X_data.ndim < self.A_data.ndim:
-                self.X_data = self.X_data.reshape(self.X_data.shape + (1,))
-
-            self.reduce = False
+        # add empty dimensions for broadcasting
+        while self.A_data.ndim < self.X_data.ndim:
+            self.A_data = self.A_data.reshape(self.A_data.shape + (1,))
+        while self.X_data.ndim < self.A_data.ndim:
+            self.X_data = self.X_data.reshape(self.X_data.shape + (1,))
 
         # add broadcast dimension for minibatch, if needed
         if not self.A_data.minibatched and self.X_data.minibatched:
@@ -183,14 +128,57 @@ class DotIncBuilder(OpBuilder):
         A = signals.gather(self.A_data)
         X = signals.gather(self.X_data)
 
-        # if self.reduce:
-        #     X = tf.reshape(X, A.get_shape())
+        result = tf.mul(A, X)
 
-        dot = tf.mul(A, X)
+        signals.scatter(self.Y_data, result, mode="inc")
 
-        if self.reduce:
+
+@Builder.register(DotInc)
+class DotIncBuilder(OpBuilder):
+    def __init__(self, ops, signals):
+        if DEBUG:
+            print("dot_inc"), len(ops)
+            print("\n".join([str(x) for x in ops]))
+            print("dst", [op.Y for op in ops])
+            print("A", [op.A for op in ops])
+            print("X", [op.X for op in ops])
+
+        n_ops = len(ops)
+
+        self.Y_data = signals.combine([op.Y for op in ops])
+
+        # group all the A's and X's
+        A_data = signals.combine([op.A for op in ops], load_indices=False)
+        X_data = signals.combine([op.X for op in ops], load_indices=False)
+
+        # separate data from each op along the first dimension
+        self.A_data = A_data.reshape((n_ops, -1, A_data.shape[1]))
+        self.X_data = X_data.reshape((n_ops, -1))
+
+        if self.A_data.minibatched and self.X_data.minibatched:
+            # add empty dimension to X for broadcasting (since we'll be doing
+            # it with the mul->reduce method)
+            self.X_data = self.X_data.reshape((self.X_data.shape[0], 1) +
+                                              self.X_data.shape[1:])
+        if self.A_data.minibatched and not self.X_data.minibatched:
+            # add empty minibatch dimension to X
+            self.X_data = self.X_data.reshape(self.X_data.shape + (1,))
+
+        self.A_data.load_indices()
+        self.X_data.load_indices()
+
+    def build_step(self, signals):
+        A = signals.gather(self.A_data)
+        X = signals.gather(self.X_data)
+
+        if not self.A_data.minibatched and self.X_data.minibatched:
+            dot = tf.batch_matmul(A, X)
+        else:
+            # this is faster than matmul if X is a vector
+            # TODO: double check that that is true
+
+            dot = tf.mul(A, X)
             dot = tf.reduce_sum(dot, axis=-2)
-        dot = tf.reshape(dot, self.Y_data.shape + (signals.minibatch_size,))
 
         signals.scatter(self.Y_data, dot, mode="inc")
 
