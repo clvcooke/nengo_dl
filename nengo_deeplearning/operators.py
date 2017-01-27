@@ -78,6 +78,7 @@ class SlicedCopyBuilder(OpBuilder):
 
 
 @Builder.register(ElementwiseInc)
+@Builder.register(DotInc)
 class ElementwiseIncBuilder(OpBuilder):
     def __init__(self, ops, signals):
         if DEBUG:
@@ -87,7 +88,7 @@ class ElementwiseIncBuilder(OpBuilder):
             print("A", [op.A for op in ops])
             print("X", [op.X for op in ops])
 
-        n_ops = len(ops)
+        self.dot_inc = isinstance(ops[0], DotInc)
 
         self.Y_data = signals.combine([op.Y for op in ops])
 
@@ -95,25 +96,20 @@ class ElementwiseIncBuilder(OpBuilder):
         A_data = signals.combine([op.A for op in ops], load_indices=False)
         X_data = signals.combine([op.X for op in ops], load_indices=False)
 
-        # if A_data.ndim == 2 and X_data.ndim == 2:
-        #     # vector-vector outer product
-        #     assert all([op.A.shape[1] == 1 for op in ops])
-        #     assert all([op.X.shape[0] == 1 for op in ops])
-        #
-        #     self.A_data = A_data.reshape((n_ops, -1, 1))
-        #     self.X_data = X_data.reshape((n_ops, 1, -1))
-        # else:
-        # in all other cases we're just doing elementwise multiplication
-
         # separate data from each op along the first dimension
-        self.A_data = A_data.reshape((n_ops, -1) + A_data.shape[1:])
-        self.X_data = X_data.reshape((n_ops, -1) + X_data.shape[1:])
+        self.A_data = A_data.reshape((len(ops), -1) + A_data.shape[1:])
+        self.X_data = X_data.reshape((len(ops), -1) + X_data.shape[1:])
 
-        # add empty dimensions for broadcasting
-        while self.A_data.ndim < self.X_data.ndim:
-            self.A_data = self.A_data.reshape(self.A_data.shape + (1,))
-        while self.X_data.ndim < self.A_data.ndim:
-            self.X_data = self.X_data.reshape(self.X_data.shape + (1,))
+        if self.dot_inc:
+            # add empty dimension to X for broadcasting across rows
+            self.X_data = self.X_data.reshape((self.X_data.shape[0], 1) +
+                                              self.X_data.shape[1:])
+        else:
+            # add empty trailing dimensions for elementwise broadcasting
+            while self.A_data.ndim < self.X_data.ndim:
+                self.A_data = self.A_data.reshape(self.A_data.shape + (1,))
+            while self.X_data.ndim < self.A_data.ndim:
+                self.X_data = self.X_data.reshape(self.X_data.shape + (1,))
 
         # add broadcast dimension for minibatch, if needed
         if not self.A_data.minibatched and self.X_data.minibatched:
@@ -130,10 +126,15 @@ class ElementwiseIncBuilder(OpBuilder):
 
         result = tf.mul(A, X)
 
+        if self.dot_inc:
+            reduce_axis = -1 - (self.A_data.minibatched or
+                                self.X_data.minibatched)
+            result = tf.reduce_sum(result, axis=reduce_axis)
+
         signals.scatter(self.Y_data, result, mode="inc")
 
 
-@Builder.register(DotInc)
+# @Builder.register(DotInc)
 class DotIncBuilder(OpBuilder):
     def __init__(self, ops, signals):
         if DEBUG:
@@ -174,9 +175,6 @@ class DotIncBuilder(OpBuilder):
         if not self.A_data.minibatched and self.X_data.minibatched:
             dot = tf.batch_matmul(A, X)
         else:
-            # this is faster than matmul if X is a vector
-            # TODO: double check that that is true
-
             dot = tf.mul(A, X)
             dot = tf.reduce_sum(dot, axis=-2)
 
