@@ -277,7 +277,62 @@ class Simulator(object):
             run_options = None
             run_metadata = None
 
-        # generate node feeds
+        # fill in placeholder inputs
+        feed_dict = {
+            self.tensor_graph.step_var: self.n_steps,
+            self.tensor_graph.stop_var: self.n_steps + n_steps,
+        }
+        if self.tensor_graph.invariant_ph is not None:
+            feed_dict = feed_dict.update(self.generate_inputs(input_feeds,
+                                                              n_steps))
+
+        # execute the simulation loop
+        try:
+            final_step, probe_data, final_bases = self.sess.run(
+                [self.tensor_graph.end_step, self.tensor_graph.probe_arrays,
+                 self.tensor_graph.end_base_arrays],
+                feed_dict=feed_dict,
+                options=run_options, run_metadata=run_metadata)
+        except tf.errors.InternalError as e:
+            if e.op.type == "PyFunc":
+                raise SimulationError(
+                    "Function '%s' caused an error "
+                    "(see error log above)" % e.op.name) from None
+            else:
+                raise e
+
+        # update n_steps
+        assert final_step - self.n_steps == n_steps
+        self.n_steps = final_step
+        self.time = self.n_steps * self.dt
+
+        if profile:
+            timeline = Timeline(run_metadata.step_stats)
+            with open("nengo_dl_profile.json", "w") as f:
+                f.write(timeline.generate_chrome_trace_format())
+
+        return probe_data
+
+    def train(self, inputs, targets, n_epochs, loss="l2_loss"):
+        n_steps = inputs.values()[0].shape[1]
+        for x in inputs.values():
+            assert x.shape[0] == self.minibatch_size
+            assert x.shape[1] == n_steps
+
+        # fill in placeholder inputs
+        feed_dict = {
+            self.tensor_graph.step_var: self.n_steps,
+            self.tensor_graph.stop_var: self.n_steps + n_steps,
+        }
+        if self.tensor_graph.invariant_ph is not None:
+            feed_dict = feed_dict.update(self.generate_inputs(inputs,
+                                                              n_steps))
+
+        self.tensor_graph.build_loss(loss, targets)
+
+
+
+    def generate_inputs(self, input_feeds, n_steps):
         if input_feeds is None:
             input_feeds = {}
         feed_vals = []
@@ -306,40 +361,8 @@ class Simulator(object):
             if self.model.sig[n]["out"] in self.tensor_graph.sig_map:
                 feed_vals += [feed_val]
 
-        # execute the loop
-        feed_dict = {
-            self.tensor_graph.step_var: self.n_steps,
-            self.tensor_graph.stop_var: self.n_steps + n_steps,
-        }
-        if self.tensor_graph.invariant_ph is not None:
-            feed_dict[self.tensor_graph.invariant_ph[1]] = np.concatenate(
-                feed_vals, axis=1)
-
-        try:
-            final_step, probe_data, final_bases = self.sess.run(
-                [self.tensor_graph.end_step, self.tensor_graph.probe_arrays,
-                 self.tensor_graph.end_base_arrays],
-                feed_dict=feed_dict,
-                options=run_options, run_metadata=run_metadata)
-        except tf.errors.InternalError as e:
-            if e.op.type == "PyFunc":
-                raise SimulationError(
-                    "Function '%s' caused an error "
-                    "(see error log above)" % e.op.name) from None
-            else:
-                raise e
-
-        # update n_steps
-        assert final_step - self.n_steps == n_steps
-        self.n_steps = final_step
-        self.time = self.n_steps * self.dt
-
-        if profile:
-            timeline = Timeline(run_metadata.step_stats)
-            with open("nengo_dl_profile.json", "w") as f:
-                f.write(timeline.generate_chrome_trace_format())
-
-        return probe_data
+        return {self.tensor_graph.invariant_ph[1]: np.concatenate(feed_vals,
+                                                                  axis=1)}
 
     def close(self):
         """Close the simulation, freeing resources.

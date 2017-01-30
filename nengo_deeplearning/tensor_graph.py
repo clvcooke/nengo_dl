@@ -3,6 +3,7 @@ from collections import defaultdict, OrderedDict
 from nengo import Process
 from nengo.builder.operator import TimeUpdate, SimPyFunc
 from nengo.builder.processes import SimProcess
+import numpy as np
 import tensorflow as tf
 
 from nengo_deeplearning import (builder, graph_optimizer, signals, utils,
@@ -273,6 +274,24 @@ class TensorGraph(object):
             (invariant_data, tf.placeholder(
                 self.dtype, (self.step_blocks, invariant_data.shape[0],
                              self.minibatch_size))))
+
+    def build_loss(self, objective, targets, optimizer):
+        with self.graph.as_default():
+            # compute loss
+            if objective == "mse":
+                loss = []
+                for p, t in targets.items():
+                    probe_index = self.model.probes.index(p)
+                    loss += [tf.square(t - self.probe_arrays[probe_index])]
+            else:
+                raise NotImplementedError
+
+            loss = tf.reduce_mean(loss)
+
+            # create optimizer operator
+            self.opt_op = optimizer.minimize(
+                loss, var_list=[b for b in self.get_base_variables().values()
+                                if b.trainable])
 
     def get_base_variables(self, reuse=False):
         """Loads the base variables used to store all simulation data.
