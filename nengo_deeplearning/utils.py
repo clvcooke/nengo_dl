@@ -3,6 +3,7 @@ import re
 from nengo.exceptions import SimulationError
 import numpy as np
 import tensorflow as tf
+from tensorflow.python.framework.ops import get_gradient_function
 
 
 def sanitize_name(name):
@@ -122,3 +123,28 @@ def cast_dtype(dtype, target):
         dtype = target
 
     return dtype
+
+
+def minibatch_generator(data, minibatch_size, shuffle=True):
+    n_inputs = next(iter(data.values())).shape[0]
+
+    if shuffle:
+        perm = np.random.permutation(n_inputs)
+
+    for i in range(0, n_inputs - n_inputs % minibatch_size, minibatch_size):
+        yield {p: data[p][perm[i:i + minibatch_size]] for p in data}
+
+
+def find_non_differentiable(inputs, outputs):
+    for o in outputs:
+        if o in inputs:
+            continue
+        else:
+            try:
+                get_gradient_function(o.op)
+                find_non_differentiable(inputs, o.op.inputs)
+            except LookupError as e:
+                print(e)
+                raise SimulationError(
+                    "Graph contains non-differentiable "
+                    "elements: %s" % o.op) from None

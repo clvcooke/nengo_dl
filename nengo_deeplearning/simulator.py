@@ -12,7 +12,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.python.client.timeline import Timeline
 
-from nengo_deeplearning import signals, DATA_DIR
+from nengo_deeplearning import signals, utils, DATA_DIR
 from nengo_deeplearning.tensor_graph import TensorGraph
 
 logger = logging.getLogger(__name__)
@@ -187,6 +187,7 @@ class Simulator(object):
 
         self.n_steps = 0
         self.time = 0.0
+        self.final_bases = list(self.tensor_graph.base_arrays_init.values())
 
     def step(self):
         """Run the simulation for one time step."""
@@ -282,13 +283,19 @@ class Simulator(object):
             self.tensor_graph.step_var: self.n_steps,
             self.tensor_graph.stop_var: self.n_steps + n_steps,
         }
-        if self.tensor_graph.invariant_ph is not None:
-            feed_dict = feed_dict.update(self.generate_inputs(input_feeds,
-                                                              n_steps))
+
+        # fill in values for base variables from previous run
+        feed_dict.update(
+            {k: v for k, v in zip(
+                self.tensor_graph.base_vars,
+                self.final_bases) if k.op.type == "Placeholder"})
+
+        # fill in input values
+        feed_dict.update(self.generate_inputs(input_feeds, n_steps))
 
         # execute the simulation loop
         try:
-            final_step, probe_data, final_bases = self.sess.run(
+            final_step, probe_data, self.final_bases = self.sess.run(
                 [self.tensor_graph.end_step, self.tensor_graph.probe_arrays,
                  self.tensor_graph.end_base_arrays],
                 feed_dict=feed_dict,
@@ -313,56 +320,84 @@ class Simulator(object):
 
         return probe_data
 
-    def train(self, inputs, targets, n_epochs, loss="l2_loss"):
-        n_steps = inputs.values()[0].shape[1]
+    def train(self, inputs, targets, n_epochs, optimizer, objective="mse"):
+        # TODO: provide some better error messages if the network is not
+        # differentiable (e.g. identify ensembles)
+
+        n_steps = next(iter(inputs.values())).shape[1]
         for x in inputs.values():
-            assert x.shape[0] == self.minibatch_size
             assert x.shape[1] == n_steps
 
-        # fill in placeholder inputs
-        feed_dict = {
-            self.tensor_graph.step_var: self.n_steps,
-            self.tensor_graph.stop_var: self.n_steps + n_steps,
-        }
-        if self.tensor_graph.invariant_ph is not None:
-            feed_dict = feed_dict.update(self.generate_inputs(inputs,
-                                                              n_steps))
+        # check for non-differentiable elements in graph
+        ops = utils.find_non_differentiable(
+            [self.tensor_graph.invariant_ph[1]],
+            [self.tensor_graph.probe_arrays[self.model.probes.index(p)]
+             for p in targets])
+        if len(ops) > 0:
+            raise SimulationError(
+                "Graph contains non-differentiable elements:\n" +
+                "\n".join([str(x) for x in ops]))
 
-        self.tensor_graph.build_loss(loss, targets)
+        # build optimizer op
+        self.tensor_graph.build_optimizer(optimizer, targets, objective)
 
+        for n in range(n_epochs):
+            for data in utils.minibatch_generator(inputs, self.minibatch_size):
+                # fill in placeholder inputs
+                feed_dict = {
+                    self.tensor_graph.step_var: 0,
+                    self.tensor_graph.stop_var: n_steps,
+                }
+                feed_dict.update(self.generate_inputs(data, n_steps))
 
+                self.sess.run([self.tensor_graph.opt_op], feed_dict=feed_dict)
 
     def generate_inputs(self, input_feeds, n_steps):
         if input_feeds is None:
             input_feeds = {}
         feed_vals = []
         for n in self.tensor_graph.invariant_inputs:
-            if n in input_feeds:
-                # move minibatch dimension to the end
-                feed_val = np.moveaxis(input_feeds[n], 0, -1)
-            elif isinstance(n.output, np.ndarray):
-                feed_val = np.tile(n.output[None, :, None],
-                                   (n_steps, 1, self.minibatch_size))
-            else:
-                func = self.tensor_graph.invariant_funcs[n]
+            # if the output signal is not in sig map, that means no operators
+            # use the output of this node. similarly, if node.size_out is 0,
+            # the node isn't producing any output values.
+            using_output = (
+                self.model.sig[n]["out"] in self.tensor_graph.sig_map and
+                n.size_out > 0)
 
-                feed_val = []
-                for i in range(self.n_steps + 1, self.n_steps + n_steps + 1):
-                    func_out = func(i * self.dt)
-                    if func_out is not None:
+            if using_output:
+                if n in input_feeds:
+                    # move minibatch dimension to the end
+                    feed_val = np.moveaxis(input_feeds[n], 0, -1)
+                elif isinstance(n.output, np.ndarray):
+                    feed_val = np.tile(n.output[None, :, None],
+                                       (n_steps, 1, self.minibatch_size))
+                else:
+                    func = self.tensor_graph.invariant_funcs[n]
+
+                    feed_val = []
+                    for i in range(self.n_steps + 1,
+                                   self.n_steps + n_steps + 1):
                         # note: need to copy the output of func
-                        feed_val += [np.array(func_out)]
+                        feed_val += [np.array(func(i * self.dt))]
 
-                if self.model.sig[n]["out"] in self.tensor_graph.sig_map:
                     feed_val = np.stack(feed_val, axis=0)
                     feed_val = np.tile(feed_val[..., None],
                                        (1, 1, self.minibatch_size))
 
-            if self.model.sig[n]["out"] in self.tensor_graph.sig_map:
                 feed_vals += [feed_val]
+            elif (not isinstance(n.output, np.ndarray) and
+                  n.output in self.tensor_graph.invariant_funcs):
+                # note: we still call the function even if the output
+                # is not being used, because it may have side-effects
+                func = self.tensor_graph.invariant_funcs[n]
+                for i in range(self.n_steps + 1, self.n_steps + n_steps + 1):
+                    func(i * self.dt)
 
-        return {self.tensor_graph.invariant_ph[1]: np.concatenate(feed_vals,
-                                                                  axis=1)}
+        if len(feed_vals) == 0:
+            return {}
+        else:
+            return {self.tensor_graph.invariant_ph[1]:
+                    np.concatenate(feed_vals, axis=1)}
 
     def close(self):
         """Close the simulation, freeing resources.

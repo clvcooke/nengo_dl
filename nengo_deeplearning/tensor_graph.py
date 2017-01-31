@@ -72,10 +72,22 @@ class TensorGraph(object):
             self.signals.dt_val = self.dt  # store the actual value as well
 
             # create base variables
-            base_vars = self.get_base_variables()
+            self.base_vars = []
+            for k, v in self.base_arrays_init.items():
+                name = "%s_%s_%s" % (
+                    k[0].__name__, "_".join(str(x) for x in k[1]), k[2])
+                if k[2]:
+                    # trainable signal, so create Variable
+                    with tf.variable_scope("base_vars", reuse=False):
+                        self.base_vars += [tf.get_variable(
+                            name, initializer=tf.constant_initializer(v),
+                            dtype=v.dtype, shape=v.shape, trainable=k[2])]
+                else:
+                    self.base_vars += [tf.placeholder(k[0], shape=v.shape,
+                                                      name=name)]
             if DEBUG:
                 print("created variables")
-                print([(k, v.name) for k, v in base_vars.items()])
+                print([str(x) for x in self.base_vars])
             self.init_op = tf.global_variables_initializer()
 
             # set up invariant inputs
@@ -222,8 +234,8 @@ class TensorGraph(object):
             return (step, stop, loop_i, probe_arrays,
                     tuple(self.signals.bases.values()))
 
-        self.step_var = tf.placeholder(tf.int32)
-        self.stop_var = tf.placeholder(tf.int32)
+        self.step_var = tf.placeholder(tf.int32, shape=(), name="step")
+        self.stop_var = tf.placeholder(tf.int32, shape=(), name="stop")
         loop_i = tf.constant(0)
         self.signals.reads_by_base = defaultdict(list)
 
@@ -237,8 +249,8 @@ class TensorGraph(object):
         # build simulation loop
         loop_vars = (
             self.step_var, self.stop_var, loop_i, probe_arrays,
-            tuple(x._ref() for x in
-                  self.get_base_variables(reuse=True).values()))
+            tuple(x._ref() if isinstance(x, tf.Variable) else x
+                  for x in self.base_vars))
 
         if self.unroll_simulation:
             for n in range(self.step_blocks):
@@ -252,7 +264,7 @@ class TensorGraph(object):
 
         self.end_step = loop_vars[0]
         self.probe_arrays = [p.pack() for p in loop_vars[3]]
-        self.end_base_arrays = loop_vars[4:]
+        self.end_base_arrays = loop_vars[4]
 
     def build_inputs(self, rng):
         invariant_data = self.signals.combine(
@@ -273,25 +285,27 @@ class TensorGraph(object):
             None if invariant_data == [] else
             (invariant_data, tf.placeholder(
                 self.dtype, (self.step_blocks, invariant_data.shape[0],
-                             self.minibatch_size))))
+                             self.minibatch_size), name="input_data")))
 
-    def build_loss(self, objective, targets, optimizer):
+    def build_optimizer(self, optimizer, targets, objective):
         with self.graph.as_default():
             # compute loss
-            if objective == "mse":
-                loss = []
-                for p, t in targets.items():
-                    probe_index = self.model.probes.index(p)
+            loss = []
+            for p, t in targets.items():
+                probe_index = self.model.probes.index(p)
+
+                if objective == "mse":
                     loss += [tf.square(t - self.probe_arrays[probe_index])]
-            else:
-                raise NotImplementedError
+                elif callable(objective):
+                    loss += objective(self.probe_arrays[probe_index], t)
+                else:
+                    raise NotImplementedError
 
             loss = tf.reduce_mean(loss)
 
             # create optimizer operator
             self.opt_op = optimizer.minimize(
-                loss, var_list=[b for b in self.get_base_variables().values()
-                                if b.trainable])
+                loss, var_list=tf.trainable_variables())
 
     def get_base_variables(self, reuse=False):
         """Loads the base variables used to store all simulation data.
@@ -304,18 +318,30 @@ class TensorGraph(object):
 
         Returns
         -------
-        dict of {tuple: `tf.Variable`}
+        dict of {tuple: `tf.Variable` or `tf.Tensor`}
             base variables, keyed by the properties of the base array
         """
 
-        with tf.variable_scope("base_vars", reuse=reuse):
-            bases = OrderedDict(
-                [(k, tf.get_variable(
-                    "%s_%s_%s" % (k[0].__name__,
-                                  "_".join(str(x) for x in k[1]),
-                                  k[2]),
-                    initializer=tf.constant_initializer(v),
-                    dtype=v.dtype, shape=v.shape, trainable=k[2]))
-                 for k, v in self.base_arrays_init.items()])
+        bases = []
+
+        if not reuse:
+            self.base_tensors = {}
+
+        for k, v in self.base_arrays_init.items():
+            name = "%s_%s_%s" % (
+                k[0].__name__, "_".join(str(x) for x in k[1]), k[2])
+            if k[2]:
+                # trainable signal, so create Variable
+                with tf.variable_scope("base_vars", reuse=reuse):
+                    bases += [tf.get_variable(
+                        name, initializer=tf.constant_initializer(v),
+                        dtype=v.dtype, shape=v.shape, trainable=k[2])]
+            else:
+                if reuse:
+                    assert k in self.base_tensors
+                else:
+                    self.base_tensors[k] = tf.placeholder(k[0], shape=v.shape,
+                                                          name=name)
+                bases += [self.base_tensors[k]]
 
         return bases
