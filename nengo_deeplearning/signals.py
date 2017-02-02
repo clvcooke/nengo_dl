@@ -218,33 +218,51 @@ class SignalDict(object):
         with tf.control_dependencies(self.reads_by_base[self.bases[dst.key]]):
             # self.bases[dst.key] = scatter_f(
             #     self.bases[dst.key], dst.tf_indices, val)
-            self.bases[dst.key] = self._scatter_f(
-                self.bases[dst.key], dst.tf_indices, val, mode=mode)
+            # self.bases[dst.key] = self._scatter_f(
+            #     self.bases[dst.key], dst.tf_indices, val, mode=mode)
+            self.bases[dst.key] = self._scatter_f2(dst, val, mode=mode)
 
         if DEBUG:
             print("new dst base", self.bases[dst.key])
 
     def _scatter_f(self, dst, idxs, src, mode="update"):
-        # TODO: do these conversions ahead of time
-        idxs = tf.expand_dims(idxs, 1)
-
         if mode == "update":
-            # TODO: is there a more efficient way to do this?
-            mask = tf.scatter_nd(idxs, tf.ones_like(src, dtype=tf.int32),
-                                 dst.get_shape())
-            return tf.where(
-                mask > 0, tf.scatter_nd(idxs, src, dst.get_shape()), dst)
+            tmp = tf.dynamic_stitch([tf.range(dst.get_shape()[0]), idxs],
+                                    [dst, src])
+            tmp.set_shape(dst.get_shape())
+
+            return tmp
+
         elif mode == "inc":
             # src = tf.reshape(src, (-1,))
             # tmp = tf.SparseTensor(
             #     idxs, src,
             #     dst.get_shape()[:1].concatenate(src.get_shape()[1:]))
-            # # return tf.sparse_add(dst, tmp)
-            # return dst + tf.sparse_tensor_to_dense(tmp)
+            # return tf.sparse_add(dst, tmp)
 
+            idxs = tf.expand_dims(idxs, 1)
             return dst + tf.scatter_nd(idxs, src, dst.get_shape())
         else:
             raise NotImplementedError
+
+    def _scatter_f2(self, dst, src, mode="update"):
+        base_idxs = tf.range(self.bases[dst.key].get_shape()[0])
+        if mode == "update":
+            result = tf.dynamic_stitch([base_idxs, dst.tf_indices],
+                                       [self.bases[dst.key], src])
+        elif mode == "inc":
+            x = self.gather(dst)
+            result = tf.dynamic_stitch([base_idxs, dst.tf_indices],
+                                       [self.bases[dst.key], x + src])
+        # elif mode == "mul":
+        #     x = self.gather(dst)
+        #     result = tf.dynamic_stitch([base_idxs, dst.tf_indices],
+        #                                [self.bases[dst.key], x * src])
+        else:
+            raise NotImplementedError
+
+        result.set_shape(self.bases[dst.key].get_shape())
+        return result
 
     def gather(self, src, force_copy=False):
         """Fetches the data corresponding to `src` from the base array.

@@ -386,7 +386,7 @@ class Simulator(object):
 
                 feed_vals += [feed_val]
             elif (not isinstance(n.output, np.ndarray) and
-                  n.output in self.tensor_graph.invariant_funcs):
+                  n.output in self.tensor_graph.invariant_funcs.values()):
                 # note: we still call the function even if the output
                 # is not being used, because it may have side-effects
                 func = self.tensor_graph.invariant_funcs[n]
