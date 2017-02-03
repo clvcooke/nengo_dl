@@ -125,14 +125,15 @@ def cast_dtype(dtype, target):
     return dtype
 
 
-def minibatch_generator(data, minibatch_size, shuffle=True):
-    n_inputs = next(iter(data.values())).shape[0]
+def minibatch_generator(inputs, targets, minibatch_size, shuffle=True):
+    n_inputs = next(iter(inputs.values())).shape[0]
 
     if shuffle:
         perm = np.random.permutation(n_inputs)
 
     for i in range(0, n_inputs - n_inputs % minibatch_size, minibatch_size):
-        yield {p: data[p][perm[i:i + minibatch_size]] for p in data}
+        yield ({n: inputs[n][perm[i:i + minibatch_size]] for n in inputs},
+               {p: targets[p][perm[i:i + minibatch_size]] for p in targets})
 
 
 def find_non_differentiable(inputs, outputs):

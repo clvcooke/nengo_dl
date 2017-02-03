@@ -94,6 +94,9 @@ class Simulator(object):
         self.step_blocks = step_blocks
         self.minibatch_size = 1 if minibatch_size is None else minibatch_size
 
+        # TODO: allow the simulator to be called flexibly with/without
+        # minibatching
+
         # build model (uses default nengo builder)
         if model is None:
             self.model = Model(dt=float(dt), label="%s, dt=%f" % (network, dt))
@@ -324,31 +327,54 @@ class Simulator(object):
         # TODO: provide some better error messages if the network is not
         # differentiable (e.g. identify ensembles)
 
+        if self.closed:
+            raise SimulatorClosed("Simulator cannot be trained because it is "
+                                  "closed.")
+
         n_steps = next(iter(inputs.values())).shape[1]
         for x in inputs.values():
             assert x.shape[1] == n_steps
 
         # check for non-differentiable elements in graph
-        ops = utils.find_non_differentiable(
-            [self.tensor_graph.invariant_ph[1]],
-            [self.tensor_graph.probe_arrays[self.model.probes.index(p)]
-             for p in targets])
-        if len(ops) > 0:
-            raise SimulationError(
-                "Graph contains non-differentiable elements:\n" +
-                "\n".join([str(x) for x in ops]))
+        # utils.find_non_differentiable(
+        #     [self.tensor_graph.invariant_ph[1]],
+        #     [self.tensor_graph.probe_arrays[self.model.probes.index(p)]
+        #      for p in targets])
 
         # build optimizer op
         self.tensor_graph.build_optimizer(optimizer, targets, objective)
 
+        # initialize any variables that were created by the optimizer
+        try:
+            self.sess.run(self.tensor_graph.opt_slots_init)
+        except tf.errors.InvalidArgumentError:
+            raise SimulationError(
+                "Tensorflow does not yet support this optimizer on the "
+                "GPU; try `Simulator(..., device='/cpu:0')`") from None
+
+        # TODO: progress bar
         for n in range(n_epochs):
-            for data in utils.minibatch_generator(inputs, self.minibatch_size):
+            for inp, tar in utils.minibatch_generator(inputs, targets,
+                                                      self.minibatch_size):
                 # fill in placeholder inputs
                 feed_dict = {
                     self.tensor_graph.step_var: 0,
                     self.tensor_graph.stop_var: n_steps,
                 }
-                feed_dict.update(self.generate_inputs(data, n_steps))
+                # fill in base variables
+                feed_dict.update(
+                    {k: v for k, v in zip(
+                        self.tensor_graph.base_vars,
+                        self.tensor_graph.base_arrays_init.values())
+                     if k.op.type == "Placeholder"})
+
+                # fill in inputs
+                feed_dict.update(self.generate_inputs(inp, n_steps))
+
+                # fill in targets
+                feed_dict.update(
+                    {self.tensor_graph.target_phs[p]: np.moveaxis(t, 0, -1)
+                     for p, t in tar.items()})
 
                 self.sess.run([self.tensor_graph.opt_op], feed_dict=feed_dict)
 
@@ -398,6 +424,40 @@ class Simulator(object):
         else:
             return {self.tensor_graph.invariant_ph[1]:
                     np.concatenate(feed_vals, axis=1)}
+
+    def save_params(self, path):
+        if self.closed:
+            raise SimulationError("Simulation has been closed, cannot save "
+                                  "parameters")
+
+        path = tf.train.Saver().save(
+            self.sess, "%s/%s" % (path, self.model.toplevel.label))
+        print("Model parameters saved to %s" % path)
+
+    def load_params(self, path):
+        if self.closed:
+            raise SimulationError("Simulation has been closed, cannot load "
+                                  "parameters")
+
+        tf.train.Saver().restore(self.sess, path)
+
+    def print_params(self, msg=None):
+        if self.closed:
+            raise SimulationError("Simulation has been closed, cannot print "
+                                  "parameters")
+
+        params = {k: v for k, v in self.tensor_graph.signals.bases.items()
+                  if k[2]}
+        param_sigs = {k: v for k, v in self.tensor_graph.sig_map.items()
+                      if k.trainable}
+
+        param_vals = self.sess.run(params)
+
+        print("%s:" % "Parameters" if msg is None else msg)
+        for sig, tens in param_sigs.items():
+            print("-" * 10)
+            print(sig)
+            print(param_vals[tens.key][tens.indices])
 
     def close(self):
         """Close the simulation, freeing resources.

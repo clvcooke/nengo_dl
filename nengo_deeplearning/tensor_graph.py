@@ -288,16 +288,22 @@ class TensorGraph(object):
                              self.minibatch_size), name="input_data")))
 
     def build_optimizer(self, optimizer, targets, objective):
-        with self.graph.as_default():
+        self.target_phs = {}
+        with self.graph.as_default(), tf.device(self.device):
             # compute loss
             loss = []
-            for p, t in targets.items():
+            for p in targets:
                 probe_index = self.model.probes.index(p)
+                self.target_phs[p] = tf.placeholder(
+                    self.dtype, (self.step_blocks, p.size_in,
+                                 self.minibatch_size), name="targets")
 
                 if objective == "mse":
-                    loss += [tf.square(t - self.probe_arrays[probe_index])]
+                    loss += [tf.square(self.target_phs[p] -
+                                       self.probe_arrays[probe_index])]
                 elif callable(objective):
-                    loss += objective(self.probe_arrays[probe_index], t)
+                    loss += objective(self.probe_arrays[probe_index],
+                                      self.target_phs[p])
                 else:
                     raise NotImplementedError
 
@@ -306,6 +312,12 @@ class TensorGraph(object):
             # create optimizer operator
             self.opt_op = optimizer.minimize(
                 loss, var_list=tf.trainable_variables())
+
+            # get any new variables created by optimizer (so they can be
+            # initialized)
+            self.opt_slots_init = tf.variables_initializer(
+                [optimizer.get_slot(v, name) for v in tf.trainable_variables()
+                 for name in optimizer.get_slot_names()])
 
     def get_base_variables(self, reuse=False):
         """Loads the base variables used to store all simulation data.
