@@ -79,12 +79,17 @@ class TensorGraph(object):
                 if k[2]:
                     # trainable signal, so create Variable
                     with tf.variable_scope("base_vars", reuse=False):
-                        self.base_vars += [tf.get_variable(
+                        var = tf.get_variable(
                             name, initializer=tf.constant_initializer(v),
-                            dtype=v.dtype, shape=v.shape, trainable=k[2])]
+                            dtype=v.dtype, shape=v.shape, trainable=k[2])
                 else:
-                    self.base_vars += [tf.placeholder(k[0], shape=v.shape,
-                                                      name=name)]
+                    var = tf.placeholder(k[0], shape=v.shape, name=name)
+
+                # pre-compute indices for the full range (used in scatter_f2)
+                self.signals.base_ranges[k] = tf.range(v.shape[0])
+
+                self.base_vars += [var]
+
             if DEBUG:
                 print("created variables")
                 print([str(x) for x in self.base_vars])

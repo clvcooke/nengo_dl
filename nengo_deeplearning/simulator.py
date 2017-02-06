@@ -323,17 +323,30 @@ class Simulator(object):
 
         return probe_data
 
-    def train(self, inputs, targets, n_epochs, optimizer, objective="mse"):
-        # TODO: provide some better error messages if the network is not
-        # differentiable (e.g. identify ensembles)
-
+    def train(self, inputs, targets, optimizer, n_epochs=1, objective="mse"):
         if self.closed:
             raise SimulatorClosed("Simulator cannot be trained because it is "
                                   "closed.")
 
-        n_steps = next(iter(inputs.values())).shape[1]
-        for x in inputs.values():
-            assert x.shape[1] == n_steps
+        for n, x in inputs.items():
+            if x.shape[1] != self.step_blocks:
+                raise SimulationError(
+                    "Length of input sequence (%s) does not match "
+                    "`step_blocks` (%s)" % (x.shape[1], self.step_blocks))
+            if x.shape[2] != n.size_out:
+                raise SimulationError(
+                    "Dimensionality of input sequence (%s) does not match "
+                    "node.size_out" % (x.shape[2], n.size_out))
+
+        for p, x in targets.items():
+            if x.shape[1] != self.step_blocks:
+                raise SimulationError(
+                    "Length of target sequence (%s) does not match "
+                    "`step_blocks` (%s)" % (x.shape[1], self.step_blocks))
+            if x.shape[2] != n.size_out:
+                raise SimulationError(
+                    "Dimensionality of target sequence (%s) does not match "
+                    "probe.size_in" % (x.shape[2], p.size_in))
 
         # check for non-differentiable elements in graph
         # utils.find_non_differentiable(
@@ -352,15 +365,16 @@ class Simulator(object):
                 "Tensorflow does not yet support this optimizer on the "
                 "GPU; try `Simulator(..., device='/cpu:0')`") from None
 
-        # TODO: progress bar
+        progress = utils.ProgressBar(n_epochs, "Training")
         for n in range(n_epochs):
             for inp, tar in utils.minibatch_generator(inputs, targets,
                                                       self.minibatch_size):
                 # fill in placeholder inputs
                 feed_dict = {
                     self.tensor_graph.step_var: 0,
-                    self.tensor_graph.stop_var: n_steps,
+                    self.tensor_graph.stop_var: self.step_blocks,
                 }
+
                 # fill in base variables
                 feed_dict.update(
                     {k: v for k, v in zip(
@@ -369,14 +383,16 @@ class Simulator(object):
                      if k.op.type == "Placeholder"})
 
                 # fill in inputs
-                feed_dict.update(self.generate_inputs(inp, n_steps))
+                feed_dict.update(self.generate_inputs(inp, self.step_blocks))
 
                 # fill in targets
                 feed_dict.update(
                     {self.tensor_graph.target_phs[p]: np.moveaxis(t, 0, -1)
                      for p, t in tar.items()})
 
-                self.sess.run([self.tensor_graph.opt_op], feed_dict=feed_dict)
+                self.sess.run([self.tensor_graph.opt_op],
+                              feed_dict=feed_dict)
+            progress.step()
 
     def generate_inputs(self, input_feeds, n_steps):
         if input_feeds is None:
