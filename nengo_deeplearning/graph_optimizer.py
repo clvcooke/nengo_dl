@@ -772,12 +772,41 @@ def create_signals(sigs, plan, float_type, minibatch_size):
     # up into all the non-overlapping chunks.
 
     base_arrays = OrderedDict()
+    curr_keys = {}
     sig_map = {}
 
+    # # find the non-overlapping partitions of the signals
+    # # TODO: we should group resets after this partitioning rather than
+    # # before, or the big Reset block will ruin the partitioning
+    # # TODO: alternatively, we could just partition based on reads, and allow
+    # # sets to happen across base arrays (how much of a performance hit would
+    # # we get from that?)
+    # starts = []
+    # stops = []
+    # for ops in plan:
+    #     for i in range(len(ops[0].all_signals)):
+    #         idxs = [sigs.index(op.all_signals[i].base) for op in ops]
+    #         starts += [min(idxs)]
+    #         stops += [max(idxs)]
+    # starts = np.asarray(starts)
+    # stops = np.asarray(stops)
+    breaks = []
+    # open = 0
+    # for i in range(len(sigs)):
+    #     open += np.sum(starts == i)
+    #     open -= np.sum(stops == i)
+    #
+    #     if open == 0:
+    #         breaks += [i + 1]
+
     # create all the base signals
-    for sig in sigs:
+    for i, sig in enumerate(sigs):
         assert sig not in sig_map
         assert not sig.is_view
+
+        if i in breaks:
+            for k in curr_keys:
+                curr_keys[k] = object()
 
         if sig.dtype in (np.float32, np.float64):
             dtype = float_type
@@ -789,8 +818,13 @@ def create_signals(sigs, plan, float_type, minibatch_size):
         # resize scalars to length 1 vectors
         shape = sig.shape if sig.shape != () else (1,)
 
+        # parameters of signal that affect the base array
+        array_params = (dtype, (None,) + shape[1:], sig.trainable)
+
         # key used to map signals to base arrays
-        key = (dtype, (None,) + shape[1:], sig.trainable)
+        if array_params not in curr_keys:
+            curr_keys[array_params] = object()
+        key = curr_keys[array_params]
 
         initial_value = sig.initial_value.astype(dtype, copy=False)
 
@@ -805,15 +839,17 @@ def create_signals(sigs, plan, float_type, minibatch_size):
                 tuple(1 for _ in shape) + (minibatch_size,))
 
         if key in base_arrays:
-            base_arrays[key] = np.concatenate(
-                (base_arrays[key], initial_value), axis=0)
+            base_arrays[key] = (
+                np.concatenate((base_arrays[key][0], initial_value), axis=0),
+                base_arrays[key][1])
         else:
-            base_arrays[key] = initial_value
+            base_arrays[key] = (initial_value, sig.trainable)
 
-        indices = np.arange(base_arrays[key].shape[0] - shape[0],
-                            base_arrays[key].shape[0])
+        indices = np.arange(base_arrays[key][0].shape[0] - shape[0],
+                            base_arrays[key][0].shape[0])
 
-        sig_map[sig] = signals.TensorSignal(indices, key, label=sig.name)
+        sig_map[sig] = signals.TensorSignal(
+            indices, key, dtype, shape, not sig.trainable, label=sig.name)
 
         if DEBUG:
             print("created base signal")
@@ -857,16 +893,17 @@ def create_signals(sigs, plan, float_type, minibatch_size):
         if sig.minibatched:
             initial_value = initial_value[..., None]
 
-        if not np.allclose(base_arrays[tensor_sig.key][tensor_sig.indices],
+        if not np.allclose(base_arrays[tensor_sig.key][0][tensor_sig.indices],
                            initial_value):
             raise BuildError("TensorSignal values don't match Signal values")
 
     # copy the base arrays to make them contiguous in memory
     for k in base_arrays:
-        base_arrays[k] = np.array(base_arrays[k])
+        base_arrays[k] = (np.array(base_arrays[k][0]), base_arrays[k][1])
 
     if DEBUG:
         print("base arrays")
-        print("\n".join([str((k, v.shape)) for k, v in base_arrays.items()]))
+        print("\n".join([str((k, v[0].dtype, v[0].shape, v[1]))
+                         for k, v in base_arrays.items()]))
 
     return base_arrays, sig_map

@@ -190,7 +190,8 @@ class Simulator(object):
 
         self.n_steps = 0
         self.time = 0.0
-        self.final_bases = list(self.tensor_graph.base_arrays_init.values())
+        self.final_bases = [
+            x[0] for x in self.tensor_graph.base_arrays_init.values()]
 
     def step(self):
         """Run the simulation for one time step."""

@@ -469,10 +469,10 @@ def test_order_signals_noreads():
     assert ordered(new_plan[0], sigs)
 
 
-def test_order_signals_neuron_states():
-    # test with neuron states (should be treated as reads)
-    assert False
+# def test_order_signals_neuron_states():
+#     # test with neuron states (should be treated as reads)
+#     assert False
 
 
-def test_create_signals():
-    assert False
+# def test_create_signals():
+#     assert False

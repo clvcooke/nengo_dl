@@ -3,7 +3,6 @@ from collections import defaultdict, OrderedDict
 from nengo import Process
 from nengo.builder.operator import TimeUpdate, SimPyFunc
 from nengo.builder.processes import SimProcess
-import numpy as np
 import tensorflow as tf
 
 from nengo_deeplearning import (builder, graph_optimizer, signals, utils,
@@ -73,17 +72,18 @@ class TensorGraph(object):
 
             # create base variables
             self.base_vars = []
-            for k, v in self.base_arrays_init.items():
+            for k, (v, trainable) in self.base_arrays_init.items():
                 name = "%s_%s_%s" % (
-                    k[0].__name__, "_".join(str(x) for x in k[1]), k[2])
-                if k[2]:
+                    v.dtype, "_".join(str(x) for x in v.shape), trainable)
+                if trainable:
                     # trainable signal, so create Variable
                     with tf.variable_scope("base_vars", reuse=False):
                         var = tf.get_variable(
                             name, initializer=tf.constant_initializer(v),
-                            dtype=v.dtype, shape=v.shape, trainable=k[2])
+                            dtype=v.dtype, shape=v.shape, trainable=True)
                 else:
-                    var = tf.placeholder(k[0], shape=v.shape, name=name)
+                    var = tf.placeholder(tf.as_dtype(v.dtype), shape=v.shape,
+                                         name=name)
 
                 # pre-compute indices for the full range (used in scatter_f2)
                 self.signals.base_ranges[k] = tf.range(v.shape[0])
@@ -323,42 +323,3 @@ class TensorGraph(object):
             self.opt_slots_init = tf.variables_initializer(
                 [optimizer.get_slot(v, name) for v in tf.trainable_variables()
                  for name in optimizer.get_slot_names()])
-
-    def get_base_variables(self, reuse=False):
-        """Loads the base variables used to store all simulation data.
-
-        Parameters
-        ----------
-        reuse : bool, optional
-            if False, create new Variables, otherwise look up the previously
-            created Variables
-
-        Returns
-        -------
-        dict of {tuple: `tf.Variable` or `tf.Tensor`}
-            base variables, keyed by the properties of the base array
-        """
-
-        bases = []
-
-        if not reuse:
-            self.base_tensors = {}
-
-        for k, v in self.base_arrays_init.items():
-            name = "%s_%s_%s" % (
-                k[0].__name__, "_".join(str(x) for x in k[1]), k[2])
-            if k[2]:
-                # trainable signal, so create Variable
-                with tf.variable_scope("base_vars", reuse=reuse):
-                    bases += [tf.get_variable(
-                        name, initializer=tf.constant_initializer(v),
-                        dtype=v.dtype, shape=v.shape, trainable=k[2])]
-            else:
-                if reuse:
-                    assert k in self.base_tensors
-                else:
-                    self.base_tensors[k] = tf.placeholder(k[0], shape=v.shape,
-                                                          name=name)
-                bases += [self.base_tensors[k]]
-
-        return bases
