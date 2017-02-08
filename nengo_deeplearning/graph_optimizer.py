@@ -775,29 +775,29 @@ def create_signals(sigs, plan, float_type, minibatch_size):
     curr_keys = {}
     sig_map = {}
 
-    # # find the non-overlapping partitions of the signals
-    # # TODO: we should group resets after this partitioning rather than
-    # # before, or the big Reset block will ruin the partitioning
-    # # TODO: alternatively, we could just partition based on reads, and allow
-    # # sets to happen across base arrays (how much of a performance hit would
-    # # we get from that?)
-    # starts = []
-    # stops = []
-    # for ops in plan:
-    #     for i in range(len(ops[0].all_signals)):
-    #         idxs = [sigs.index(op.all_signals[i].base) for op in ops]
-    #         starts += [min(idxs)]
-    #         stops += [max(idxs)]
-    # starts = np.asarray(starts)
-    # stops = np.asarray(stops)
+    # find the non-overlapping partitions of the signals
+    # TODO: we should group resets after this partitioning rather than
+    # before, or the big Reset block will ruin the partitioning
+    # TODO: alternatively, we could just partition based on reads, and allow
+    # sets to happen across base arrays (how much of a performance hit would
+    # we get from that?)
+    starts = []
+    stops = []
+    for ops in plan:
+        for i in range(len(ops[0].all_signals)):
+            idxs = [sigs.index(op.all_signals[i].base) for op in ops]
+            starts += [min(idxs)]
+            stops += [max(idxs)]
+    starts = np.asarray(starts)
+    stops = np.asarray(stops)
     breaks = []
-    # open = 0
-    # for i in range(len(sigs)):
-    #     open += np.sum(starts == i)
-    #     open -= np.sum(stops == i)
-    #
-    #     if open == 0:
-    #         breaks += [i + 1]
+    open = 0
+    for i in range(len(sigs)):
+        open += np.sum(starts == i)
+        open -= np.sum(stops == i)
+
+        if open == 0:
+            breaks += [i + 1]
 
     # create all the base signals
     for i, sig in enumerate(sigs):

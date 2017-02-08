@@ -43,11 +43,13 @@ class TensorGraph(object):
                  op.process in node_processes))]
 
         # group mergeable operators
-        plan = graph_optimizer.greedy_planner(operators)
+        # plan = graph_optimizer.greedy_planner(operators)
         # plan = graph_optimizer.tree_planner(operators)
+        plan = graph_optimizer.noop_planner(operators)
 
         # order signals/operators to promote contiguous reads
-        sigs, self.plan = graph_optimizer.order_signals(plan, n_passes=10)
+        # sigs, self.plan = graph_optimizer.order_signals(plan, n_passes=10)
+        sigs, self.plan = graph_optimizer.noop_order_signals(plan)
 
         # create base arrays and map Signals to TensorSignals (views on those
         # base arrays)
@@ -61,7 +63,9 @@ class TensorGraph(object):
                                           self.minibatch_size)
 
         with self.graph.as_default(), tf.device(self.device):
-            # clear probe data
+            # make sure indices are loaded for all probe signals (they won't
+            # have been loaded if this signal is only accessed as part of a
+            # larger block during the simulation)
             for p in self.model.probes:
                 self.sig_map[self.model.sig[p]["in"]].load_indices()
 
@@ -73,8 +77,9 @@ class TensorGraph(object):
             # create base variables
             self.base_vars = []
             for k, (v, trainable) in self.base_arrays_init.items():
-                name = "%s_%s_%s" % (
-                    v.dtype, "_".join(str(x) for x in v.shape), trainable)
+                name = "%s_%s_%s_%s" % (
+                    v.dtype, "_".join(str(x) for x in v.shape), trainable,
+                    str(k)[-5:-1])
                 if trainable:
                     # trainable signal, so create Variable
                     with tf.variable_scope("base_vars", reuse=False):
@@ -197,9 +202,13 @@ class TensorGraph(object):
             # next step starts
             with self.graph.control_dependencies([loop_i]):
                 # fill in invariant input data
-                if self.invariant_ph is not None:
-                    self.signals.scatter(self.invariant_ph[0],
-                                         self.invariant_ph[1][loop_i])
+                # if self.invariant_ph is not None:
+                #     self.signals.scatter(self.invariant_ph[0],
+                #                          self.invariant_ph[1][loop_i])
+                for n in self.invariant_ph:
+                    self.signals.scatter(
+                        self.sig_map[self.model.sig[n]["out"]],
+                        self.invariant_ph[n][loop_i])
 
                 probe_tensors, side_effects = self.build_step()
 
@@ -272,11 +281,18 @@ class TensorGraph(object):
         self.end_base_arrays = loop_vars[4]
 
     def build_inputs(self, rng):
-        invariant_data = self.signals.combine(
-            [self.model.sig[n]["out"] for n in self.invariant_inputs
-             if self.model.sig[n]["out"] in self.sig_map])
+        # invariant_data = [self.sig_map[self.model.sig[n]["out"]]
+        #                   for n in self.invariant_inputs
+        #                   if self.model.sig[n]["out"] in self.sig_map]
         self.invariant_funcs = {}
+        self.invariant_ph = {}
         for n in self.invariant_inputs:
+            if self.model.sig[n]["out"] in self.sig_map:
+                self.sig_map[self.model.sig[n]["out"]].load_indices()
+                self.invariant_ph[n] = tf.placeholder(
+                    self.dtype, (self.step_blocks, n.size_out,
+                                 self.minibatch_size))
+
             if isinstance(n.output, Process):
                 self.invariant_funcs[n] = n.output.make_step(
                     (n.size_in,), (n.size_out,), self.dt,
@@ -286,11 +302,11 @@ class TensorGraph(object):
                     (n.size_out,), self.dtype)(n.output)
             else:
                 self.invariant_funcs[n] = n.output
-        self.invariant_ph = (
-            None if invariant_data == [] else
-            (invariant_data, tf.placeholder(
-                self.dtype, (self.step_blocks, invariant_data.shape[0],
-                             self.minibatch_size), name="input_data")))
+        # self.invariant_ph = (
+        #     None if invariant_data == [] else
+        #     (invariant_data, tf.placeholder(
+        #         self.dtype, (self.step_blocks, invariant_data.shape[0],
+        #                      self.minibatch_size), name="input_data")))
 
     def build_optimizer(self, optimizer, targets, objective):
         self.target_phs = {}

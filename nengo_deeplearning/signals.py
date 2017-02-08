@@ -201,11 +201,18 @@ class SignalDict(object):
         # write (note: this is only any reads that have happened since the
         # last write, since each write changes the base array object)
         with tf.control_dependencies(self.reads_by_base[self.bases[dst.key]]):
-            # self.bases[dst.key] = scatter_f(
-            #     self.bases[dst.key], dst.tf_indices, val)
-            # self.bases[dst.key] = self._scatter_f(
-            #     self.bases[dst.key], dst.tf_indices, val, mode=mode)
-            self.bases[dst.key] = self._scatter_f2(dst, val, mode=mode)
+            if np.all(np.arange(self.bases[dst.key].get_shape()[0].value) ==
+                      dst.indices):
+                if mode == "update":
+                    self.bases[dst.key] = tf.identity(val)
+                elif mode == "inc":
+                    self.bases[dst.key] += val
+            else:
+                # self.bases[dst.key] = scatter_f(
+                #     self.bases[dst.key], dst.tf_indices, val)
+                # self.bases[dst.key] = self._scatter_f(
+                #     self.bases[dst.key], dst.tf_indices, val, mode=mode)
+                self.bases[dst.key] = self._scatter_f2(dst, val, mode=mode)
 
         if DEBUG:
             print("new dst base", self.bases[dst.key])
@@ -280,6 +287,9 @@ class SignalDict(object):
         # is more efficient
         if force_copy or src.as_slice is None:
             result = tf.gather(self.bases[src.key], src.tf_indices)
+        elif np.all(np.arange(self.bases[src.key].get_shape()[0].value) ==
+                    src.indices):
+            result = tf.identity(self.bases[src.key])
         else:
             result = tf.strided_slice(self.bases[src.key], *src.as_slice)
 

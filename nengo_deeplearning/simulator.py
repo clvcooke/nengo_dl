@@ -398,7 +398,7 @@ class Simulator(object):
     def generate_inputs(self, input_feeds, n_steps):
         if input_feeds is None:
             input_feeds = {}
-        feed_vals = []
+        feed_vals = {}
         for n in self.tensor_graph.invariant_inputs:
             # if the output signal is not in sig map, that means no operators
             # use the output of this node. similarly, if node.size_out is 0,
@@ -427,7 +427,7 @@ class Simulator(object):
                     feed_val = np.tile(feed_val[..., None],
                                        (1, 1, self.minibatch_size))
 
-                feed_vals += [feed_val]
+                feed_vals[self.tensor_graph.invariant_ph[n]] = feed_val
             elif (not isinstance(n.output, np.ndarray) and
                   n.output in self.tensor_graph.invariant_funcs.values()):
                 # note: we still call the function even if the output
@@ -436,11 +436,12 @@ class Simulator(object):
                 for i in range(self.n_steps + 1, self.n_steps + n_steps + 1):
                     func(i * self.dt)
 
-        if len(feed_vals) == 0:
-            return {}
-        else:
-            return {self.tensor_graph.invariant_ph[1]:
-                    np.concatenate(feed_vals, axis=1)}
+        # if len(feed_vals) == 0:
+        #     return {}
+        # else:
+        #     return {self.tensor_graph.invariant_ph[1]:
+        #             np.concatenate(feed_vals, axis=1)}
+        return feed_vals
 
     def save_params(self, path):
         if self.closed:
