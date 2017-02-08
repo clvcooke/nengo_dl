@@ -48,8 +48,8 @@ class TensorGraph(object):
         plan = graph_optimizer.noop_planner(operators)
 
         # order signals/operators to promote contiguous reads
-        sigs, self.plan = graph_optimizer.order_signals(plan, n_passes=10)
-        # sigs, self.plan = graph_optimizer.noop_order_signals(plan)
+        # sigs, self.plan = graph_optimizer.order_signals(plan, n_passes=10)
+        sigs, self.plan = graph_optimizer.noop_order_signals(plan)
 
         # create base arrays and map Signals to TensorSignals (views on those
         # base arrays)
@@ -79,7 +79,7 @@ class TensorGraph(object):
             for k, (v, trainable) in self.base_arrays_init.items():
                 name = "%s_%s_%s_%s" % (
                     v.dtype, "_".join(str(x) for x in v.shape), trainable,
-                    str(k)[-5:-1])
+                    str(k)[-9:-1])
                 if trainable:
                     # trainable signal, so create Variable
                     with tf.variable_scope("base_vars", reuse=False):

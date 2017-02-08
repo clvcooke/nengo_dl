@@ -11,7 +11,7 @@ from nengo.utils.graphs import toposort
 from nengo.utils.simulator import operator_depencency_graph
 import numpy as np
 
-from nengo_deeplearning import signals, neurons, processes, builder, DEBUG
+from nengo_deeplearning import signals, processes, builder, DEBUG
 
 
 def greedy_planner(operators):
@@ -180,25 +180,8 @@ def mergeable(op, chosen_ops):
         if op.t != c.t:
             return False
     elif isinstance(op, SimNeurons):
-        if type(c.neurons) in neurons.TF_NEURON_IMPL:
-            # for neuron types with a custom tensorflow implementation,
-            # the types must match exactly
-            if type(c.neurons) != type(op.neurons):
-                return False
-        else:
-            # we can't merge generic with custom types
-            if type(op.neurons) in neurons.TF_NEURON_IMPL:
-                return False
-
-            # all the states must have the same base (note: this is checking
-            # different state signals within one op against each other, rather
-            # than checking signals across ops, which we already did)
-            if len(op.states) > 0:
-                dtype = op.states[0].dtype
-                shape = op.states[0].base.shape[1:]
-                if np.any([s.dtype != dtype or s.base.shape[1:] != shape
-                           for s in op.states]):
-                    return False
+        if type(c.neurons) != type(op.neurons):
+            return False
     elif isinstance(op, SimProcess):
         # as with SimNeurons, we can merge ops if they have a custom
         # implementation, or merge generic processes, but can't mix
@@ -781,6 +764,7 @@ def create_signals(sigs, plan, float_type, minibatch_size):
     # TODO: alternatively, we could just partition based on reads, and allow
     # sets to happen across base arrays (how much of a performance hit would
     # we get from that?)
+    breaks = []
     starts = []
     stops = []
     for ops in plan:
@@ -790,7 +774,7 @@ def create_signals(sigs, plan, float_type, minibatch_size):
             stops += [max(idxs)]
     starts = np.asarray(starts)
     stops = np.asarray(stops)
-    breaks = []
+
     open = 0
     for i in range(len(sigs)):
         open += np.sum(starts == i)

@@ -129,8 +129,9 @@ def test_mergeable():
                                      DummySignal())])
 
     # check non-custom matching
-    assert mergeable(SimNeurons(Izhikevich(), DummySignal(), DummySignal()),
-                     [SimNeurons(AdaptiveLIF(), DummySignal(), DummySignal())])
+    assert not mergeable(
+        SimNeurons(Izhikevich(), DummySignal(), DummySignal()),
+        [SimNeurons(AdaptiveLIF(), DummySignal(), DummySignal())])
     assert not mergeable(
         SimNeurons(Izhikevich(), DummySignal(), DummySignal(),
                    states=[DummySignal(dtype=np.float32)]),
