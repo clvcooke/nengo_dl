@@ -48,8 +48,8 @@ class TensorGraph(object):
         plan = graph_optimizer.noop_planner(operators)
 
         # order signals/operators to promote contiguous reads
-        # sigs, self.plan = graph_optimizer.order_signals(plan, n_passes=10)
-        sigs, self.plan = graph_optimizer.noop_order_signals(plan)
+        sigs, self.plan = graph_optimizer.order_signals(plan, n_passes=10)
+        # sigs, self.plan = graph_optimizer.noop_order_signals(plan)
 
         # create base arrays and map Signals to TensorSignals (views on those
         # base arrays)
