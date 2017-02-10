@@ -2,7 +2,7 @@ from collections import OrderedDict
 import copy
 
 from nengo.builder.operator import (SimPyFunc, SlicedCopy, DotInc,
-                                    ElementwiseInc, Copy)
+                                    ElementwiseInc, Copy, Reset)
 from nengo.builder.neurons import SimNeurons
 from nengo.builder.processes import SimProcess
 from nengo.exceptions import BuildError
@@ -759,8 +759,6 @@ def create_signals(sigs, plan, float_type, minibatch_size):
     sig_map = {}
 
     # find the non-overlapping partitions of the signals
-    # TODO: we should group resets after this partitioning rather than
-    # before, or the big Reset block will ruin the partitioning
     # TODO: alternatively, we could just partition based on reads, and allow
     # sets to happen across base arrays (how much of a performance hit would
     # we get from that?)
@@ -768,10 +766,13 @@ def create_signals(sigs, plan, float_type, minibatch_size):
     starts = []
     stops = []
     for ops in plan:
-        for i in range(len(ops[0].all_signals)):
-            idxs = [sigs.index(op.all_signals[i].base) for op in ops]
-            starts += [min(idxs)]
-            stops += [max(idxs)]
+        # note: we don't include Resets, otherwise the big reset block
+        # overrides most of the partitioning
+        if not isinstance(ops[0], Reset):
+            for i in range(len(ops[0].all_signals)):
+                idxs = [sigs.index(op.all_signals[i].base) for op in ops]
+                starts += [min(idxs)]
+                stops += [max(idxs)]
     starts = np.asarray(starts)
     stops = np.asarray(stops)
 

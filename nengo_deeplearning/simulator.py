@@ -182,7 +182,8 @@ class Simulator(object):
             log_device_placement=False,
         )
 
-        self.sess = tf.Session(graph=self.tensor_graph.graph, config=config)
+        self.sess = tf.InteractiveSession(graph=self.tensor_graph.graph,
+                                          config=config)
         self.closed = False
 
         # initialize variables
@@ -367,22 +368,23 @@ class Simulator(object):
                 "GPU; try `Simulator(..., device='/cpu:0')`") from None
 
         progress = utils.ProgressBar(n_epochs, "Training")
+        # fill in placeholder inputs
+        feed_dict = {
+            self.tensor_graph.step_var: 0,
+            self.tensor_graph.stop_var: self.step_blocks,
+        }
+
+        # fill in base variables
+        feed_dict.update(
+            {k: v for k, v in zip(
+                self.tensor_graph.base_vars,
+                [x[0] for x in
+                 self.tensor_graph.base_arrays_init.values()])
+             if k.op.type == "Placeholder"})
+
         for n in range(n_epochs):
             for inp, tar in utils.minibatch_generator(inputs, targets,
                                                       self.minibatch_size):
-                # fill in placeholder inputs
-                feed_dict = {
-                    self.tensor_graph.step_var: 0,
-                    self.tensor_graph.stop_var: self.step_blocks,
-                }
-
-                # fill in base variables
-                feed_dict.update(
-                    {k: v for k, v in zip(
-                        self.tensor_graph.base_vars,
-                        self.tensor_graph.base_arrays_init.values())
-                     if k.op.type == "Placeholder"})
-
                 # fill in inputs
                 feed_dict.update(self.generate_inputs(inp, self.step_blocks))
 
@@ -398,6 +400,15 @@ class Simulator(object):
     def generate_inputs(self, input_feeds, n_steps):
         if input_feeds is None:
             input_feeds = {}
+        else:
+            # validate inputs
+            for n, v in input_feeds.items():
+                target_shape = (self.minibatch_size, n_steps, n.size_out)
+                if v.shape != target_shape:
+                    raise SimulationError(
+                        "Input feed for node %s has wrong shape; expected %s, "
+                        "saw %s" % (n, target_shape, v.shape))
+
         feed_vals = {}
         for n in self.tensor_graph.invariant_inputs:
             # if the output signal is not in sig map, that means no operators

@@ -43,13 +43,13 @@ class TensorGraph(object):
                  op.process in node_processes))]
 
         # group mergeable operators
-        # plan = graph_optimizer.greedy_planner(operators)
+        plan = graph_optimizer.greedy_planner(operators)
         # plan = graph_optimizer.tree_planner(operators)
-        plan = graph_optimizer.noop_planner(operators)
+        # plan = graph_optimizer.noop_planner(operators)
 
         # order signals/operators to promote contiguous reads
-        # sigs, self.plan = graph_optimizer.order_signals(plan, n_passes=10)
-        sigs, self.plan = graph_optimizer.noop_order_signals(plan)
+        sigs, self.plan = graph_optimizer.order_signals(plan, n_passes=10)
+        # sigs, self.plan = graph_optimizer.noop_order_signals(plan)
 
         # create base arrays and map Signals to TensorSignals (views on those
         # base arrays)
@@ -328,11 +328,11 @@ class TensorGraph(object):
                 else:
                     raise NotImplementedError
 
-            loss = tf.reduce_mean(loss)
+            self.loss = tf.reduce_mean(loss)
 
             # create optimizer operator
             self.opt_op = optimizer.minimize(
-                loss, var_list=tf.trainable_variables())
+                self.loss, var_list=tf.trainable_variables())
 
             # get any new variables created by optimizer (so they can be
             # initialized)
