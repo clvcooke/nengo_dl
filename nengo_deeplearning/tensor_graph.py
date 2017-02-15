@@ -277,7 +277,7 @@ class TensorGraph(object):
                 back_prop=False)
 
         self.end_step = loop_vars[0]
-        self.probe_arrays = [p.pack() for p in loop_vars[3]]
+        self.probe_arrays = [p.stack() for p in loop_vars[3]]
         self.end_base_arrays = loop_vars[4]
 
     def build_inputs(self, rng):

@@ -1,6 +1,10 @@
 import os
 import warnings
 
+__copyright__ = "2016, Applied Brain Research"
+__license__ = "Free for non-commercial use; see LICENSE.rst"
+from .version import version as __version__
+
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 DEBUG = False
 # TODO: change the debug system to use a proper logger
