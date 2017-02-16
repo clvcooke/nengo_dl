@@ -45,7 +45,7 @@ class Simulator(object):
     step_blocks : int, optional
         controls how many simulation steps run each time the graph is
         executed (affects memory usage and graph construction time)
-    device : None or "/cpu:0" or "/gpu:[0-n]", optional
+    device : None or ``"/cpu:0"`` or ``"/gpu:[0-n]"``, optional
         device on which to execute computations (if None then uses the
         default device as determined by Tensorflow)
     unroll_simulation : bool, optional
@@ -288,8 +288,9 @@ class Simulator(object):
 
         Notes
         -----
-        - This function should not be called directly; run the simulator through
-          :meth:`.step`, :meth:`.run_steps`, or :meth:`.run`.
+        - This function should not be called directly; run the simulator
+          through :meth:`.Simulator.step`, :meth:`.Simulator.run_steps`, or
+          :meth:`.Simulator.run`.
 
         - The ``input_feeds`` argument allows the user to pass several
           simultaneous input sequences through the model.  That is, instead of
@@ -456,9 +457,22 @@ class Simulator(object):
                  self.tensor_graph.base_arrays_init.values()])
              if k.op.type == "Placeholder"})
 
+        # generator to sample minibatch_sized subsets from inputs and targets
+        def minibatch_generator(inp, tar, minibatch_size, shuffle=True):
+            n_inputs = next(iter(inp.values())).shape[0]
+
+            if shuffle:
+                perm = np.random.permutation(n_inputs)
+
+            for i in range(0, n_inputs - n_inputs % minibatch_size,
+                           minibatch_size):
+                yield (
+                    {n: inputs[n][perm[i:i + minibatch_size]] for n in inp},
+                    {p: targets[p][perm[i:i + minibatch_size]] for p in tar})
+
         for n in range(n_epochs):
-            for inp, tar in utils.minibatch_generator(inputs, targets,
-                                                      self.minibatch_size):
+            for inp, tar in minibatch_generator(inputs, targets,
+                                                self.minibatch_size):
                 # fill in inputs
                 feed_dict.update(self._generate_inputs(inp, self.step_blocks))
 
