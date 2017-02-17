@@ -1,5 +1,7 @@
 import nengo
 import numpy as np
+import pytest
+import tensorflow as tf
 
 from nengo_deeplearning.tests import TestSimulator
 
@@ -107,4 +109,79 @@ def test_minibatch():
     assert np.allclose(sim.data[ps[1]], probe_data[1])
     assert np.allclose(sim.data[ps[2]], probe_data[2])
 
-# TODO: test input_feeds
+
+def test_input_feeds():
+    minibatch_size = 10
+    step_blocks = 5
+
+    with nengo.Network() as net:
+        inp = nengo.Node([0, 0, 0])
+        out = nengo.Node(size_in=3)
+        nengo.Connection(inp, out, synapse=None)
+        p = nengo.Probe(out)
+
+    with TestSimulator(net, minibatch_size=minibatch_size,
+                       step_blocks=step_blocks) as sim:
+        val = np.random.randn(minibatch_size, step_blocks, 3)
+        sim.run_steps(step_blocks, input_feeds={inp: val})
+        assert np.allclose(sim.data[p], val)
+
+        with pytest.raises(nengo.exceptions.SimulationError):
+            sim.run_steps(step_blocks, input_feeds={
+                inp: np.random.randn(minibatch_size, step_blocks + 1, 3)})
+
+
+def test_train_ff():
+    minibatch_size = 4
+    step_blocks = 1
+
+    with nengo.Network() as net:
+        net.config[nengo.Ensemble].gain = nengo.dists.Choice([1])
+        net.config[nengo.Ensemble].bias = nengo.dists.Uniform(-1, 1)
+        net.config[nengo.Connection].synapse = None
+
+        inp = nengo.Node([0, 0])
+        ens = nengo.Ensemble(10, 1, neuron_type=nengo.Sigmoid())
+        out = nengo.Ensemble(1, 1, neuron_type=nengo.Sigmoid())
+        nengo.Connection(inp, ens.neurons,
+                         transform=np.random.uniform(-0.1, 0.1, size=(10, 2)))
+        nengo.Connection(ens, out, solver=nengo.solvers.LstsqL2(weights=True))
+        p = nengo.Probe(out)
+
+    with TestSimulator(net, minibatch_size=minibatch_size,
+                       step_blocks=step_blocks) as sim:
+        x = np.asarray([[[0, 0]], [[0, 1]], [[1, 0]], [[1, 1]]])
+        y = np.asarray([[[0]], [[1]], [[1]], [[0]]])
+
+        sim.print_params("pre")
+
+        sim.train({inp: x}, {p: y}, tf.train.GradientDescentOptimizer(1e-3),
+                  n_epochs=10000)
+
+        sim.print_params("post")
+
+        sim.check_gradients()
+
+        sim.step(input_feeds={inp: x})
+
+        assert np.allclose(sim.data[p], y)
+
+
+def test_train_recurrent():
+    pass
+
+
+def test_train_objective():
+    pass
+
+
+def test_generate_inputs():
+    pass
+
+
+def test_update_probe_data():
+    pass
+
+
+def test_save_load_params():
+    pass

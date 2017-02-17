@@ -1,4 +1,4 @@
-from collections import defaultdict, OrderedDict
+from collections import OrderedDict
 
 from nengo import Process
 from nengo.builder.operator import TimeUpdate, SimPyFunc
@@ -35,6 +35,7 @@ class TensorGraph(object):
         device on which to execute computations (if None then uses the
         default device as determined by Tensorflow)
     """
+
     def __init__(self, model, dt, step_blocks, unroll_simulation, dtype,
                  minibatch_size, device):
         self.model = model
@@ -282,7 +283,6 @@ class TensorGraph(object):
         self.step_var = tf.placeholder(tf.int32, shape=(), name="step")
         self.stop_var = tf.placeholder(tf.int32, shape=(), name="stop")
         loop_i = tf.constant(0)
-        self.signals.reads_by_base = defaultdict(list)
 
         probe_arrays = [
             tf.TensorArray(
@@ -378,8 +378,8 @@ class TensorGraph(object):
 
                 # compute loss
                 if objective == "mse":
-                    loss += [tf.square(self.target_phs[p] -
-                                       self.probe_arrays[probe_index])]
+                    loss += [tf.reduce_mean(tf.square(
+                        self.target_phs[p] - self.probe_arrays[probe_index]))]
                 elif callable(objective):
                     loss += objective(self.probe_arrays[probe_index],
                                       self.target_phs[p])

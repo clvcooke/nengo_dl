@@ -410,18 +410,18 @@ class Simulator(object):
                     "`step_blocks` (%s)" % (x.shape[1], self.step_blocks))
             if x.shape[2] != n.size_out:
                 raise SimulationError(
-                    "Dimensionality of input sequence (%s) does not match "
-                    "node.size_out" % (x.shape[2], n.size_out))
+                    "Dimensionality of input sequence (%d) does not match "
+                    "node.size_out (%d)" % (x.shape[2], n.size_out))
 
         for p, x in targets.items():
             if x.shape[1] != self.step_blocks:
                 raise SimulationError(
                     "Length of target sequence (%s) does not match "
                     "`step_blocks` (%s)" % (x.shape[1], self.step_blocks))
-            if x.shape[2] != n.size_out:
+            if x.shape[2] != p.size_in:
                 raise SimulationError(
-                    "Dimensionality of target sequence (%s) does not match "
-                    "probe.size_in" % (x.shape[2], p.size_in))
+                    "Dimensionality of target sequence (%d) does not match "
+                    "probe.size_in (%d)" % (x.shape[2], p.size_in))
 
         # check for non-differentiable elements in graph
         # utils.find_non_differentiable(
@@ -625,7 +625,7 @@ class Simulator(object):
                                   "parameters")
 
         params = {k: v for k, v in self.tensor_graph.signals.bases.items()
-                  if k[2]}
+                  if v.dtype._is_ref_dtype}
         param_sigs = {k: v for k, v in self.tensor_graph.sig_map.items()
                       if k.trainable}
 
@@ -699,6 +699,33 @@ class Simulator(object):
         dt = self.dt if dt is None else dt
         n_steps = int(self.n_steps * (self.dt / dt))
         return dt * np.arange(1, n_steps + 1)
+
+    def check_gradients(self):
+        # fill in placeholder inputs
+        feed_dict = {
+            self.tensor_graph.step_var: 0,
+            self.tensor_graph.stop_var: self.step_blocks,
+        }
+        feed_dict.update(
+            {k: v for k, v in zip(
+                self.tensor_graph.base_vars,
+                [x[0] for x in self.tensor_graph.base_arrays_init.values()])
+             if k.op.type == "Placeholder"})
+        feed_dict.update(
+            {self.tensor_graph.target_phs[p]:
+                 np.zeros(self.tensor_graph.target_phs[p].get_shape())
+             for p in self.model.probes})
+
+        feed_dict.update(
+            {self.tensor_graph.invariant_ph[n]:
+                 np.zeros((self.step_blocks, n.size_out, self.minibatch_size))
+             for n in self.tensor_graph.invariant_inputs})
+
+        # check gradient wrt inp
+        for inp in self.tensor_graph.invariant_ph.values():
+            assert tf.test.compute_gradient_error(
+                inp, inp.get_shape().as_list(), self.tensor_graph.loss, (1,),
+                extra_feed_dict=feed_dict) < 1e-4
 
 
 class ProbeDict(Mapping):
