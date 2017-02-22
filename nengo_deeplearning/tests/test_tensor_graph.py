@@ -48,37 +48,27 @@ def test_gradients(device):
             {x: np.zeros((minibatch_size, step_blocks, x.size_in))
              for x in (p, p2)}, "mse")
 
-        # fill in placeholder inputs
-        feed_dict = {
-            sim.tensor_graph.step_var: 0,
-            sim.tensor_graph.stop_var: sim.step_blocks,
-        }
-        feed_dict.update(
-            {k: v for k, v in zip(
-                sim.tensor_graph.base_vars,
-                [x[0] for x in sim.tensor_graph.base_arrays_init.values()])
-             if k.op.type == "Placeholder"})
-        feed_dict.update(
-            {sim.tensor_graph.target_phs[x]:
-                 np.zeros(sim.tensor_graph.target_phs[x].get_shape())
-             for x in (p, p2)})
-
         # check gradient wrt inp
         x = sim.tensor_graph.invariant_ph[inp]
-        feed_dict[sim.tensor_graph.invariant_ph[inp2]] = np.zeros(
-            (step_blocks, inp2.size_out, minibatch_size))
         assert tf.test.compute_gradient_error(
             x, x.get_shape().as_list(), sim.tensor_graph.loss, (1,),
-            extra_feed_dict=feed_dict) < 1e-4
+            extra_feed_dict=sim._fill_feed(
+                sim.step_blocks,
+                {inp2: np.zeros((minibatch_size, step_blocks, inp2.size_out))},
+                {x: np.zeros((minibatch_size, step_blocks, x.size_in))
+                 for x in (p, p2)})
+        ) < 1e-4
 
         # check gradient wrt inp2
         x = sim.tensor_graph.invariant_ph[inp2]
-        del feed_dict[sim.tensor_graph.invariant_ph[inp2]]
-        feed_dict[sim.tensor_graph.invariant_ph[inp]] = np.zeros(
-            (step_blocks, inp.size_out, minibatch_size))
         assert tf.test.compute_gradient_error(
             x, x.get_shape().as_list(), sim.tensor_graph.loss, (1,),
-            extra_feed_dict=feed_dict) < 1e-4
+            extra_feed_dict=sim._fill_feed(
+                sim.step_blocks,
+                {inp: np.zeros((minibatch_size, step_blocks, inp.size_out))},
+                {x: np.zeros((minibatch_size, step_blocks, x.size_in))
+                 for x in (p, p2)})
+        ) < 1e-4
 
         # also check the gradients this way, to make sure that check_gradients
         # is working

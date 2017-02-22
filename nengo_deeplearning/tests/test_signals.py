@@ -233,7 +233,7 @@ def test_mark_signals():
         conn0 = nengo.Connection(ens0, ens1)
         conn1 = nengo.Connection(ens0, ens1, learning_rule_type=nengo.PES())
         conn2 = nengo.Connection(ens0, ens2, learning_rule_type=nengo.Voja())
-        p = nengo.Probe(ens2)
+        nengo.Probe(ens2)
 
     model = nengo.builder.Model()
     model.build(net)
