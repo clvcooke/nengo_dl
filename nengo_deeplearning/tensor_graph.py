@@ -146,7 +146,6 @@ class TensorGraph(object):
             if DEBUG:
                 print("created base arrays")
                 print([str(x) for x in self.base_vars])
-            self.init_op = tf.global_variables_initializer()
 
             # set up invariant inputs
             self.build_inputs(rng)
@@ -159,6 +158,9 @@ class TensorGraph(object):
 
             # build stage
             self.build_loop()
+
+            # op for initializing variables (will be called by simulator)
+            self.init_op = tf.global_variables_initializer()
 
     def build_step(self):
         """Build the operators that execute a single simulation timestep

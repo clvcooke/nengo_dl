@@ -1,5 +1,5 @@
 import nengo
-from nengo.exceptions import ValidationError
+from nengo.exceptions import ValidationError, SimulationError
 import numpy as np
 import pytest
 import tensorflow as tf
@@ -8,7 +8,7 @@ import nengo_deeplearning as nengo_dl
 
 
 def test_validation():
-    with nengo.Network():
+    with nengo.Network() as net:
         with pytest.raises(ValidationError):
             nengo_dl.TensorNode([0])
 
@@ -33,6 +33,10 @@ def test_validation():
         n = nengo_dl.TensorNode(lambda t: tf.zeros((5, 2)), size_out=4)
         assert n.size_out == 4
 
+    with nengo.Simulator(net) as sim:
+        with pytest.raises(SimulationError):
+            sim.step()
+
 
 def test_node():
     minibatch_size=3
@@ -50,3 +54,26 @@ def test_node():
 
     assert np.allclose(sim.data[p0], sim.trange()[None, :, None])
     assert np.allclose(sim.data[p1], np.sin(sim.trange()[None, :, None]))
+
+
+def test_pre_build():
+    class TestFunc:
+        def pre_build(self, size_in, size_out):
+            self.weights = tf.Variable(tf.ones((size_in[1], size_out[1])))
+
+        def __call__(self, t, x):
+            return tf.matmul(x, self.weights)
+
+    with nengo.Network() as net:
+        inp = nengo.Node([1, 1])
+        test = nengo_dl.TensorNode(TestFunc(), size_in=2, size_out=3)
+        nengo.Connection(inp, test, synapse=None)
+        p = nengo.Probe(test)
+
+    with nengo_dl.Simulator(net) as sim:
+        sim.step()
+        assert np.allclose(sim.data[p], [[2, 2, 2]])
+
+        sim.reset()
+        sim.step()
+        assert np.allclose(sim.data[p], [[2, 2, 2]])
