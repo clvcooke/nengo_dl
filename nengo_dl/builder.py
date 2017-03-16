@@ -31,7 +31,7 @@ class Builder(object):
         """
 
         logger.debug("===================")
-        logger.debug("PRE BUILD", ops)
+        logger.debug("PRE BUILD %s", ops)
         logger.debug("sets %s", [op.sets for op in ops])
         logger.debug("incs %s", [op.incs for op in ops])
         logger.debug("reads %s", [op.reads for op in ops])

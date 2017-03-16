@@ -484,7 +484,7 @@ def hamming_sort(signals, blocks):
     logger.debug("hamming sort:")
 
     while True:
-        logger.debug("curr_block", curr_block)
+        logger.debug("curr_block %s", curr_block)
 
         # add any matching blocks to the sorted list
         zero_dists = np.all(blocks == curr_block, axis=1)
