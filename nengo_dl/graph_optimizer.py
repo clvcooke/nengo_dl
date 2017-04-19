@@ -194,7 +194,7 @@ def greedy_planner(operators):
             del successors_of[op]
 
     logger.debug("GREEDY PLAN")
-    logger.debug("\n".join([str(x) for x in plan]))
+    logger.debug("\n" + "\n".join([str(x) for x in plan]))
 
     assert len(operators) == sum(len(ops) for ops in plan)
 
@@ -312,8 +312,12 @@ def noop_planner(operators):
     """
 
     dependency_graph = operator_depencency_graph(operators)
+    plan = [(op,) for op in toposort(dependency_graph)]
 
-    return [(op,) for op in toposort(dependency_graph)]
+    logger.debug("NOOP PLAN")
+    logger.debug("\n" + "\n".join([str(x) for x in plan]))
+
+    return plan
 
 
 def order_signals(plan, n_passes=10):
@@ -494,7 +498,7 @@ def order_signals(plan, n_passes=10):
     logger.debug("final sorted signals")
     logger.debug(sorted_signals)
     logger.debug("new plan")
-    logger.debug("\n".join([str(new_plan[ops]) for ops in plan]))
+    logger.debug("\n" + "\n".join([str(x) for x in new_plan.values()]))
 
     return sorted_signals, [new_plan[ops] for ops in plan]
 

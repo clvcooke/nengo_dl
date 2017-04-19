@@ -33,7 +33,7 @@ if version_info < minimum_nengo_version:
         % version_info)
 elif version_info > latest_nengo_version:
     warnings.warn("This version of `nengo_dl` has not been tested "
-                  "with your `nengo` version (%s). The latest fully "
+                  "with your `nengo` version %s. The latest fully "
                   "supported version is %s" % (
                       version_info, latest_nengo_version))
 
