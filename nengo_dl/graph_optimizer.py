@@ -13,7 +13,8 @@ from nengo.utils.graphs import toposort, BidirectionalDAG, transitive_closure
 from nengo.utils.simulator import operator_depencency_graph
 import numpy as np
 
-from nengo_dl import signals, processes, builder, tensor_node
+from nengo_dl import (signals, processes, builder, tensor_node, operators,
+                      learning_rules, neurons)
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +48,8 @@ def mergeable(op, chosen_ops):
 
     # sets/incs/reads/updates must all match
     if (len(op.sets) != len(c.sets) or len(op.incs) != len(c.incs) or
-            len(op.reads) != len(c.reads) or
-            len(op.updates) != len(c.updates)):
+                len(op.reads) != len(c.reads) or
+                len(op.updates) != len(c.updates)):
         return False
 
     # signals must be mergeable into the same base array
@@ -320,35 +321,67 @@ def noop_planner(operators):
     return plan
 
 
-def transitive_planner(operators):
-    dg = BidirectionalDAG(operator_depencency_graph(operators))
+def transitive_planner(op_list):
+    dg = BidirectionalDAG(operator_depencency_graph(op_list))
 
-    logger.debug("operators")
-    logger.debug("\n".join(str(op) for op in operators))
+    ops_by_type = defaultdict(list)
+    for op in op_list:
+        ops_by_type[builder.Builder.builders[type(op)]].append(op)
 
-    groups = []
+    order = [
+        operators.SparseDotIncBuilder, operators.ElementwiseIncBuilder,
+        neurons.SimNeuronsBuilder, processes.SimProcessBuilder,
+        operators.SimPyFuncBuilder, operators.CopyBuilder,
+        learning_rules.SimOjaBuilder, learning_rules.SimVojaBuilder,
+        learning_rules.SimBCMBuilder, operators.ResetBuilder]
 
-    while len(operators) > 0:
+    for builder_type in order:
+        ops = ops_by_type[builder_type]
+        groups = []
+        for op in ops:
+            for g in groups:
+                if mergeable(op, g):
+                    g.append(op)
+                    break
+            else:
+                groups.append([op])
+
         trans = transitive_closure(dg.forward)
+        trans = {k: set(x for x in v
+                        if not isinstance(x, tuple) and
+                        builder.Builder.builders[type(x)] == builder_type)
+                 for k, v in trans.items() if
+                 not isinstance(k, tuple) and
+                 builder.Builder.builders[type(k)] == builder_type}
 
-        # TODO: use heuristic ordering
-        group = [operators.pop()]
-        for op in operators:
-            if mergeable(op, group):
-                for op2 in group:
+        while len(groups) > 0:
+            group = groups.pop()
+            good_group = []
+            bad_group = []
+            for op in group:
+                for i, op2 in enumerate(good_group):
                     if op2 in trans[op] or op in trans[op2]:
+                        bad_group.append(op)
                         break
                 else:
-                    group.append(op)
+                    good_group.append(op)
 
-        for op in group[1:]:
-            operators.remove(op)
+            if len(bad_group) > 0:
+                groups.append(bad_group)
 
-        dg.merge(group, tuple(group))
+            dg.merge(good_group, tuple(good_group))
 
-    logger.debug("merged dg")
-    logger.debug("\n".join("%s:\n    %s" % (k, v)
-                           for k, v in dg.forward.items()))
+            merged_trans = set(x for op in good_group for x in trans[op])
+            # for op in good_group:
+            #     trans[op] = trans[op].union(merged_trans)
+            for g in groups:
+                for op in g:
+                    if any(x in trans[op] for x in good_group):
+                        trans[op] = trans[op].union(merged_trans)
+
+        del ops_by_type[builder_type]
+
+    assert len(ops_by_type) == 0
 
     plan = toposort(dg.forward)
 
