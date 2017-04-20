@@ -9,7 +9,7 @@ from nengo.builder.neurons import SimNeurons
 from nengo.builder.processes import SimProcess
 from nengo.exceptions import BuildError
 from nengo.utils.compat import iteritems
-from nengo.utils.graphs import toposort, BidirectionalDAG, transitive_closure
+from nengo.utils.graphs import toposort, BidirectionalDAG
 from nengo.utils.simulator import operator_depencency_graph
 import numpy as np
 
@@ -41,7 +41,6 @@ def mergeable(op, chosen_ops):
     # note: we only need to check against the first item in the list,
     # since we know the rest all match
     c = chosen_ops[0]
-
     # must share the same builder
     if builder.Builder.builders[type(op)] != builder.Builder.builders[type(c)]:
         return False
@@ -321,6 +320,7 @@ def noop_planner(operators):
     return plan
 
 
+@profile
 def transitive_planner(op_list):
     dg = BidirectionalDAG(operator_depencency_graph(op_list))
 
@@ -331,9 +331,11 @@ def transitive_planner(op_list):
     order = [
         operators.SparseDotIncBuilder, operators.ElementwiseIncBuilder,
         neurons.SimNeuronsBuilder, processes.SimProcessBuilder,
-        operators.SimPyFuncBuilder, operators.CopyBuilder,
+        operators.SimPyFuncBuilder,
         learning_rules.SimOjaBuilder, learning_rules.SimVojaBuilder,
-        learning_rules.SimBCMBuilder, operators.ResetBuilder]
+        learning_rules.SimBCMBuilder,
+        operators.CopyBuilder, operators.ResetBuilder,
+        tensor_node.SimTensorNodeBuilder]
 
     for builder_type in order:
         ops = ops_by_type[builder_type]
@@ -346,25 +348,28 @@ def transitive_planner(op_list):
             else:
                 groups.append([op])
 
-        trans = transitive_closure(dg.forward)
-        trans = {k: set(x for x in v
-                        if not isinstance(x, tuple) and
-                        builder.Builder.builders[type(x)] == builder_type)
-                 for k, v in trans.items() if
-                 not isinstance(k, tuple) and
-                 builder.Builder.builders[type(k)] == builder_type}
+        groups = [set(g) for g in groups]
+
+        trans = {}
+        transitive_closure_recurse(
+            dg.forward,
+            [op for op in dg.forward if not isinstance(op, tuple) and
+             builder.Builder.builders[type(op)] == builder_type],
+            trans, builder_type)
 
         while len(groups) > 0:
             group = groups.pop()
-            good_group = []
-            bad_group = []
-            for op in group:
-                for i, op2 in enumerate(good_group):
-                    if op2 in trans[op] or op in trans[op2]:
-                        bad_group.append(op)
-                        break
+            good_group = set()
+            bad_group = set()
+            while len(group) > 0:
+                op = group.pop()
+                if any(x in trans[op] for x in good_group):
+                    bad_group.add(op)
                 else:
-                    good_group.append(op)
+                    intersect = group & trans[op]
+                    bad_group |= intersect
+                    group -= intersect
+                    good_group.add(op)
 
             if len(bad_group) > 0:
                 groups.append(bad_group)
@@ -372,8 +377,6 @@ def transitive_planner(op_list):
             dg.merge(good_group, tuple(good_group))
 
             merged_trans = set(x for op in good_group for x in trans[op])
-            # for op in good_group:
-            #     trans[op] = trans[op].union(merged_trans)
             for g in groups:
                 for op in g:
                     if any(x in trans[op] for x in good_group):
@@ -389,6 +392,40 @@ def transitive_planner(op_list):
     logger.debug("\n" + "\n".join([str(x) for x in plan]))
 
     return plan
+
+
+@profile
+def transitive_closure(dg):
+    topo_sorted = toposort(dg)
+
+    # sets = {}
+    reachables = {}
+    for vertex in reversed(topo_sorted):
+        reachables[vertex] = set(dg[vertex])
+        for edge in dg[vertex]:
+            reachables[vertex].update(reachables[edge])
+            # reachables[vertex] = frozenset(reachables[vertex])
+
+            # # We try to reuse existing sets as this can significantly reduce
+            # # memory in some cases (which is important in the OpMergeOptimizer).
+            # if reachables[vertex] in sets:
+            #     reachables[vertex] = sets[reachables[vertex]]
+            # sets[reachables[vertex]] = reachables[vertex]
+    return reachables
+
+
+@profile
+def transitive_closure_recurse(dg, ops, trans, builder_type):
+    for op in ops:
+        if op in trans:
+            continue
+
+        transitive_closure_recurse(dg, dg[op], trans, builder_type)
+        subs = set(x for x in dg[op] if not isinstance(x, tuple) and
+                   builder.Builder.builders[type(x)] == builder_type)
+        for x in dg[op]:
+            subs |= trans[x]
+        trans[op] = subs
 
 
 def order_signals(plan, n_passes=10):
