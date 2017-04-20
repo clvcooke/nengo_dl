@@ -9,7 +9,7 @@ from nengo.builder.neurons import SimNeurons
 from nengo.builder.processes import SimProcess
 from nengo.exceptions import BuildError
 from nengo.utils.compat import iteritems
-from nengo.utils.graphs import toposort
+from nengo.utils.graphs import toposort, BidirectionalDAG, transitive_closure
 from nengo.utils.simulator import operator_depencency_graph
 import numpy as np
 
@@ -315,6 +315,44 @@ def noop_planner(operators):
     plan = [(op,) for op in toposort(dependency_graph)]
 
     logger.debug("NOOP PLAN")
+    logger.debug("\n" + "\n".join([str(x) for x in plan]))
+
+    return plan
+
+
+def transitive_planner(operators):
+    dg = BidirectionalDAG(operator_depencency_graph(operators))
+
+    logger.debug("operators")
+    logger.debug("\n".join(str(op) for op in operators))
+
+    groups = []
+
+    while len(operators) > 0:
+        trans = transitive_closure(dg.forward)
+
+        # TODO: use heuristic ordering
+        group = [operators.pop()]
+        for op in operators:
+            if mergeable(op, group):
+                for op2 in group:
+                    if op2 in trans[op] or op in trans[op2]:
+                        break
+                else:
+                    group.append(op)
+
+        for op in group[1:]:
+            operators.remove(op)
+
+        dg.merge(group, tuple(group))
+
+    logger.debug("merged dg")
+    logger.debug("\n".join("%s:\n    %s" % (k, v)
+                           for k, v in dg.forward.items()))
+
+    plan = toposort(dg.forward)
+
+    logger.debug("TRANSITIVE PLAN")
     logger.debug("\n" + "\n".join([str(x) for x in plan]))
 
     return plan
