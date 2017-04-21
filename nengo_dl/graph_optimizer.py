@@ -9,7 +9,7 @@ from nengo.builder.neurons import SimNeurons
 from nengo.builder.processes import SimProcess
 from nengo.exceptions import BuildError
 from nengo.utils.compat import iteritems
-from nengo.utils.graphs import toposort, BidirectionalDAG
+from nengo.utils.graphs import toposort, BidirectionalDAG, reverse_edges
 from nengo.utils.simulator import operator_depencency_graph
 import numpy as np
 
@@ -322,11 +322,14 @@ def noop_planner(operators):
 
 @profile
 def transitive_planner(op_list):
-    dg = BidirectionalDAG(operator_depencency_graph(op_list))
+    dg = operator_depencency_graph(op_list)
+    op_codes = {op: np.uint32(i) for i, op in enumerate(op_list)}
+    dg = {op_codes[k]: set(op_codes[x] for x in v) for k, v in dg.items()}
+    dg = BidirectionalDAG(dg)
 
-    ops_by_type = defaultdict(list)
-    for op in op_list:
-        ops_by_type[builder.Builder.builders[type(op)]].append(op)
+    ops_by_type = defaultdict(set)
+    for i, op in enumerate(op_list):
+        ops_by_type[builder.Builder.builders[type(op)]].add(np.uint32(i))
 
     order = [
         operators.SparseDotIncBuilder, operators.ElementwiseIncBuilder,
@@ -338,55 +341,93 @@ def transitive_planner(op_list):
         tensor_node.SimTensorNodeBuilder]
 
     for builder_type in order:
-        ops = ops_by_type[builder_type]
-        groups = []
-        for op in ops:
-            for g in groups:
-                if mergeable(op, g):
-                    g.append(op)
-                    break
-            else:
-                groups.append([op])
+        if builder_type not in ops_by_type:
+            continue
 
-        groups = [set(g) for g in groups]
+        # ops = ops_by_type[builder_type]
+        # groups = []
+        # for op in ops:
+        #     for g in groups:
+        #         if mergeable(op_list[op], (op_list[g[0]],)):
+        #             g.append(op)
+        #             break
+        #     else:
+        #         groups.append([op])
+        #
+        # groups = [set(g) for g in groups]
+        #
+        # trans = {}
+        # transitive_closure_recurse(
+        #     dg.forward, ops, trans, builder_type, op_list)
+        # trans_reverse = {}
+        # transitive_closure_recurse(
+        #     dg.backward, ops, trans_reverse, builder_type, op_list)
+        # trans_reverse = reverse_edges(trans)
+        #
+        # while len(groups) > 0:
+        #     group = groups.pop()
+        #     good_group = set()
+        #     bad_group = set()
+        #     while len(group) > 0:
+        #         op = group.pop()
+        #
+        #         intersect = group & (trans[op] | trans_reverse[op])
+        #         bad_group |= intersect
+        #         group -= intersect
+        #         good_group.add(op)
+        #
+        #     if len(bad_group) > 0:
+        #         groups.append(bad_group)
+        #
+        #     dg.merge(good_group, tuple(good_group))
+        #     merged_trans = set()
+        #     merged_trans_reverse = set()
+        #     for op in good_group:
+        #         merged_trans |= trans[op]
+        #         merged_trans_reverse |= trans_reverse[op]
+        #
+        #     for g in groups:
+        #         for op in g:
+        #             if op in merged_trans:
+        #                 trans_reverse[op] |= merged_trans_reverse
+        #             elif op in merged_trans_reverse:
+        #                 trans[op] |= merged_trans
+
+        ops = ops_by_type[builder_type]
 
         trans = {}
-        transitive_closure_recurse(
-            dg.forward,
-            [op for op in dg.forward if not isinstance(op, tuple) and
-             builder.Builder.builders[type(op)] == builder_type],
-            trans, builder_type)
+        transitive_closure_recurse(dg.forward, ops, trans, builder_type,
+                                   op_list, {})
 
-        while len(groups) > 0:
-            group = groups.pop()
-            good_group = set()
-            bad_group = set()
-            while len(group) > 0:
-                op = group.pop()
-                if any(x in trans[op] for x in good_group):
-                    bad_group.add(op)
+        trans = {k: v for k, v in trans.items() if not isinstance(k, tuple)
+                 and k in ops}
+
+        while len(trans) > 0:
+            available = set(k for k, v in trans.items() if len(v) == 0)
+            groups = []
+            for op in available:
+                for g in groups:
+                    if mergeable(op_list[op], (op_list[g[0]],)):
+                        g.append(op)
+                        break
                 else:
-                    intersect = group & trans[op]
-                    bad_group |= intersect
-                    group -= intersect
-                    good_group.add(op)
+                    groups.append([op])
 
-            if len(bad_group) > 0:
-                groups.append(bad_group)
-
-            dg.merge(good_group, tuple(good_group))
-
-            merged_trans = set(x for op in good_group for x in trans[op])
             for g in groups:
-                for op in g:
-                    if any(x in trans[op] for x in good_group):
-                        trans[op] = trans[op].union(merged_trans)
+                dg.merge(g, tuple(g))
+
+            for op in available:
+                del trans[op]
+
+            for op in trans:
+                trans[op] -= available
 
         del ops_by_type[builder_type]
 
     assert len(ops_by_type) == 0
 
     plan = toposort(dg.forward)
+    plan = [tuple(op_list[x] for x in group) for group in plan]
 
     logger.debug("TRANSITIVE PLAN")
     logger.debug("\n" + "\n".join([str(x) for x in plan]))
@@ -415,17 +456,27 @@ def transitive_closure(dg):
 
 
 @profile
-def transitive_closure_recurse(dg, ops, trans, builder_type):
+def transitive_closure_recurse(dg, ops, trans, builder_type, op_list, cache):
     for op in ops:
         if op in trans:
             continue
 
-        transitive_closure_recurse(dg, dg[op], trans, builder_type)
-        subs = set(x for x in dg[op] if not isinstance(x, tuple) and
-                   builder.Builder.builders[type(x)] == builder_type)
+        transitive_closure_recurse(dg, dg[op], trans, builder_type, op_list,
+                                   cache)
+        post = set(x for x in dg[op] if not isinstance(x, tuple) and
+                   builder.Builder.builders[type(op_list[x])] == builder_type)
+
         for x in dg[op]:
-            subs |= trans[x]
-        trans[op] = subs
+            post |= trans[x]
+
+        # trans[op] = post
+
+        post = frozenset(post)
+        if post in cache:
+            trans[op] = cache[post]
+        else:
+            trans[op] = post
+            cache[post] = post
 
 
 def order_signals(plan, n_passes=10):
