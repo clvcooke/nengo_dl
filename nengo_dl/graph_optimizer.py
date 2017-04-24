@@ -9,7 +9,7 @@ from nengo.builder.neurons import SimNeurons
 from nengo.builder.processes import SimProcess
 from nengo.exceptions import BuildError
 from nengo.utils.compat import iteritems
-from nengo.utils.graphs import toposort, BidirectionalDAG
+from nengo.utils.graphs import toposort, BidirectionalDAG, reverse_edges
 from nengo.utils.simulator import operator_depencency_graph
 import numpy as np
 
@@ -330,9 +330,11 @@ def transitive_planner(op_list):
     del op_codes
     dg = BidirectionalDAG(dg)
 
+    op_builders = [builder.Builder.builders[type(op)] for op in op_list]
+
     ops_by_type = defaultdict(set)
     for i, op in enumerate(op_list):
-        ops_by_type[builder.Builder.builders[type(op)]].add(np.uint32(i))
+        ops_by_type[op_builders[i]].add(np.uint32(i))
 
     order = [
         operators.SparseDotIncBuilder, operators.ElementwiseIncBuilder,
@@ -351,7 +353,7 @@ def transitive_planner(op_list):
 
         trans = [None for _ in range(n_ele)]
         transitive_closure_recurse(dg.forward, ops, trans, builder_type,
-                                   op_list, {})
+                                   op_builders, {})
         # trans = transitive_closure(dg, ops, op_list, builder_type)
 
         trans = {i: v for i, v in enumerate(trans) if i < len(op_list)
@@ -379,6 +381,17 @@ def transitive_planner(op_list):
             for op in trans:
                 trans[op] -= available
 
+            # groups = sorted(groups, key=lambda x: len(x))
+            # selected = groups[-1]
+            # groups = groups[:-1]
+            #
+            # dg.merge(selected, n_ele)
+            # merge_groups[n_ele] = selected
+            # n_ele += 1
+            #
+            # for op in selected:
+            #     pass
+
         del ops_by_type[builder_type]
 
     assert len(ops_by_type) == 0
@@ -393,31 +406,30 @@ def transitive_planner(op_list):
 
 
 @profile
-def transitive_closure_recurse(dg, ops, trans, builder_type, op_list, cache):
+def transitive_closure_recurse(dg, ops, trans, builder_type, op_builders, cache):
     for op in ops:
         todo = [x for x in dg[op] if trans[x] is None]
-        if len(todo) > 0:
-            transitive_closure_recurse(dg, todo, trans, builder_type, op_list,
-                                       cache)
+        transitive_closure_recurse(dg, todo, trans, builder_type, op_builders,
+                                   cache)
+
         merged = set(
-            x for x in dg[op] if x < len(op_list) and
-            builder.Builder.builders[type(op_list[x])] == builder_type)
+            x for x in dg[op] if x < len(op_builders) and
+            op_builders[x] == builder_type)
 
-        unique_posts = []
-        for x in dg[op]:
-            post = trans[x]
-            if any(post is y for y in unique_posts):
-                continue
+        unique_posts = {id(trans[x]): trans[x] for x in dg[op]}
 
-            merged |= post
-            unique_posts.append(post)
-
-        key = frozenset(merged)
-        if key in cache:
-            trans[op] = cache[key]
+        if len(merged) == 0 and len(unique_posts) == 1:
+            trans[op] = next(iter(unique_posts.values()))
         else:
-            trans[op] = merged
-            cache[key] = merged
+            for x in unique_posts.values():
+                merged |= x
+
+            key = frozenset(merged)
+            try:
+                trans[op] = cache[key]
+            except KeyError:
+                trans[op] = merged
+                cache[key] = merged
 
 
 @profile
