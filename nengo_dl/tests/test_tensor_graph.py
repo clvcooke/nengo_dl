@@ -3,6 +3,7 @@ import pytest
 
 from nengo_dl import tensor_graph
 
+
 @pytest.mark.parametrize("unroll", (True, False))
 def test_gradients(Simulator, unroll, seed):
     step_blocks = 10
@@ -63,6 +64,7 @@ def test_build_loss(Simulator):
                 sim.tensor_graph.build_loss(loss, (p,)))
 
 # TODO: add test for optimizer caching
+
 
 def test_mark_signals():
     with nengo.Network() as net:

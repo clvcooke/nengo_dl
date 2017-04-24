@@ -1,4 +1,3 @@
-import nengo
 from nengo.exceptions import BuildError
 import numpy as np
 import pytest

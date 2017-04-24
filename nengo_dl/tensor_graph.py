@@ -11,7 +11,8 @@ from nengo.exceptions import SimulationError
 from nengo.neurons import Direct
 import tensorflow as tf
 
-from nengo_dl import builder, graph_optimizer, signals, utils, tensor_node
+from nengo_dl import (builder, graph_optimizer, signals, utils, tensor_node,
+                      nengo_version)
 
 logger = logging.getLogger(__name__)
 
@@ -85,14 +86,13 @@ class TensorGraph(object):
         start = time.time()
 
         # group mergeable operators
-        # plan = graph_optimizer.greedy_planner(operators)
-        # plan = graph_optimizer.tree_planner(operators)
-        # plan = graph_optimizer.noop_planner(operators)
-        plan = graph_optimizer.transitive_planner(operators)
+        if nengo_version < (2, 4, 0):
+            plan = graph_optimizer.greedy_planner(operators)
+        else:
+            plan = graph_optimizer.transitive_planner(operators)
 
         # order signals/operators to promote contiguous reads
         sigs, self.plan = graph_optimizer.order_signals(plan, n_passes=10)
-        # sigs, self.plan = graph_optimizer.noop_order_signals(plan)
 
         # create base arrays and map Signals to TensorSignals (views on those
         # base arrays)

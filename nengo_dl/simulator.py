@@ -15,7 +15,7 @@ import tensorflow as tf
 from tensorflow.python.client.timeline import Timeline
 from tensorflow.python.ops import gradient_checker
 
-from nengo_dl import signals, utils, DATA_DIR
+from nengo_dl import utils, DATA_DIR
 from nengo_dl.tensor_graph import TensorGraph
 from nengo_dl.utils import print_and_flush
 
