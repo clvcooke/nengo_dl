@@ -48,8 +48,8 @@ def mergeable(op, chosen_ops):
 
     # sets/incs/reads/updates must all match
     if (len(op.sets) != len(c.sets) or len(op.incs) != len(c.incs) or
-            len(op.reads) != len(c.reads) or
-            len(op.updates) != len(c.updates)):
+                len(op.reads) != len(c.reads) or
+                len(op.updates) != len(c.updates)):
         return False
 
     # signals must be mergeable into the same base array
@@ -321,6 +321,7 @@ def noop_planner(operators):
     return plan
 
 
+@profile
 def transitive_planner(op_list):
     """Create merged execution plan through transitive closure construction.
 
@@ -340,7 +341,8 @@ def transitive_planner(op_list):
     """
 
     # note: importing this here since it only exists in nengo 2.4.0
-    from nengo.utils.graphs import BidirectionalDAG
+    # from nengo.utils.graphs import BidirectionalDAG
+    import networkx as nx
 
     n_ele = len(op_list)
     merge_groups = {}
@@ -348,7 +350,9 @@ def transitive_planner(op_list):
     op_codes = {op: np.uint32(i) for i, op in enumerate(op_list)}
     dg = {op_codes[k]: set(op_codes[x] for x in v) for k, v in dg.items()}
     op_codes = None  # so it will get garbage collected
-    dg = BidirectionalDAG(dg)
+
+    # dg = BidirectionalDAG(dg)
+    dg = nx.DiGraph(data=dg)
 
     op_builders = [builder.Builder.builders[type(op)] for op in op_list]
 
@@ -370,6 +374,9 @@ def transitive_planner(op_list):
         operators.CopyBuilder, operators.ResetBuilder,
         tensor_node.SimTensorNodeBuilder]
 
+    # group_dict = {}
+    trans = nx.transitive_closure(dg)
+
     for builder_type in order:
         if builder_type not in ops_by_type:
             # no ops of this type in the model
@@ -377,45 +384,45 @@ def transitive_planner(op_list):
 
         ops = ops_by_type[builder_type]
 
-        # compute transitive closure
-        trans = [None for _ in range(n_ele)]
-        transitive_closure_recurse(dg.forward, ops, trans, builder_type,
-                                   op_builders, {})
-
-        # reduce it to the elements we care about (ops of the current
-        # builder type)
-        trans = {i: v for i, v in enumerate(trans[:len(op_list)]) if i in ops}
-
-        while len(trans) > 0:
-            # find all the ops that have no downstream dependents
-            available = set(k for k, v in trans.items() if len(v) == 0)
-
-            # sort those ops into mergeable groups
-            groups = []
-            for op in available:
-                for g in groups:
-                    if mergeable(op_list[op], (op_list[g[0]],)):
-                        g.append(op)
-                        break
-                else:
-                    groups.append([op])
-
-            # merge the groups
-            for g in groups:
-                dg.merge(g, n_ele)
-                merge_groups[n_ele] = g
-                n_ele += 1
-
-            # remove those ops from the transitive closure
-            for op in available:
-                del trans[op]
-
-            # remove those ops from the transitive closure of upstream ops
-            # note: we first remove all the duplicate aliased transitive sets,
-            # to reduce the number of set operations we need to do
-            unique_trans = {id(v): v for v in trans.values()}
-            for t in unique_trans.values():
-                t -= available
+        # # compute transitive closure
+        # trans = [None for _ in range(n_ele)]
+        # transitive_closure_recurse(dg.forward, ops, trans, builder_type,
+        #                            op_builders, {})
+        #
+        # # reduce it to the elements we care about (ops of the current
+        # # builder type)
+        # trans = {i: v for i, v in enumerate(trans[:len(op_list)]) if i in ops}
+        #
+        # while len(trans) > 0:
+        #     # find all the ops that have no downstream dependents
+        #     available = set(k for k, v in trans.items() if len(v) == 0)
+        #
+        #     # sort those ops into mergeable groups
+        #     groups = []
+        #     for op in available:
+        #         for g in groups:
+        #             if mergeable(op_list[op], (op_list[g[0]],)):
+        #                 g.append(op)
+        #                 break
+        #         else:
+        #             groups.append([op])
+        #
+        #     # merge the groups
+        #     for g in groups:
+        #         dg.merge(g, n_ele)
+        #         merge_groups[n_ele] = g
+        #         n_ele += 1
+        #
+        #     # remove those ops from the transitive closure
+        #     for op in available:
+        #         del trans[op]
+        #
+        #     # remove those ops from the transitive closure of upstream ops
+        #     # note: we first remove all the duplicate aliased transitive sets,
+        #     # to reduce the number of set operations we need to do
+        #     unique_trans = {id(v): v for v in trans.values()}
+        #     for t in unique_trans.values():
+        #         t -= available
 
         # trans_reverse = [None for _ in range(n_ele)]
         # transitive_closure_recurse(dg.backward, ops, trans_reverse,
@@ -441,18 +448,64 @@ def transitive_planner(op_list):
         # merge_groups[n_ele] = group
         # n_ele += 1
 
+
+        trans_sub = trans.subgraph(ops)
+        while len(trans_sub) > 0:
+            # find all the ops that have no downstream dependents
+            available = [n for n, d in trans_sub.out_degree_iter() if d == 0]
+
+            # sort those ops into mergeable groups
+            groups = []
+            # group_dict = {}
+            for op in available:
+                for g in groups:
+                    if mergeable(op_list[op], (op_list[g],)):
+                        # group_dict[op] = g
+
+                        merge_groups[g].append(op)
+
+                        dg = nx.contracted_nodes(dg, g, op, self_loops=False)
+                        trans = nx.contracted_nodes(trans, g, op, self_loops=False)
+
+                        break
+                else:
+                    groups.append(op)
+                    # group_dict[op] = op
+                    merge_groups[op] = [op]
+
+            # merge the groups
+            # dg = nx.quotient_graph(
+            #     dg, lambda x, y: x in group_dict and y in group_dict and
+            #                      group_dict[x] == group_dict[y])
+            # for k, v in group_dict.items():
+            #     if k != v:
+            #         dg = nx.contracted_nodes(dg, v, k)
+
+            # remove nodes from transitive graph
+            trans_sub.remove_nodes_from(available)
+
         del ops_by_type[builder_type]
 
     assert len(ops_by_type) == 0
 
     # toposort the merged graph to come up with execution plan
-    plan = toposort(dg.forward)
+    # plan = toposort(dg.forward)
+    plan = nx.topological_sort(dg)
     plan = [tuple(op_list[x] for x in merge_groups[group]) for group in plan]
+    # plan = [tuple(op_list[x] for x in recursive_flatten(g)) for g in plan]
 
     logger.debug("TRANSITIVE PLAN")
     logger.debug("\n" + "\n".join([str(x) for x in plan]))
 
     return plan
+
+
+def recursive_flatten(sets):
+    for x in sets:
+        if isinstance(x, frozenset):
+            yield from recursive_flatten(x)
+        else:
+            yield x
 
 
 def transitive_closure_recurse(dg, ops, trans, builder_type, op_builders,
