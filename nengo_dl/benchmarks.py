@@ -223,5 +223,5 @@ def profiling():
 
 
 if __name__ == "__main__":
-    # compare_backends(raw=True)
-    profiling()
+    compare_backends(raw=True)
+    # profiling()

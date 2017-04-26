@@ -8,8 +8,8 @@ from .version import version as __version__  # noqa: E402,F401
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
-import builtins
-builtins.profile = lambda x: x
+# import builtins
+# builtins.profile = lambda x: x
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
 

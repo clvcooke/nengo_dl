@@ -375,7 +375,7 @@ def transitive_planner(op_list):
         tensor_node.SimTensorNodeBuilder]
 
     # group_dict = {}
-    trans = nx.transitive_closure(dg)
+    # trans = nx.transitive_closure(dg)
 
     for builder_type in order:
         if builder_type not in ops_by_type:
@@ -448,7 +448,7 @@ def transitive_planner(op_list):
         # merge_groups[n_ele] = group
         # n_ele += 1
 
-
+        trans = nx.transitive_closure(dg)
         trans_sub = trans.subgraph(ops)
         while len(trans_sub) > 0:
             # find all the ops that have no downstream dependents
@@ -465,7 +465,7 @@ def transitive_planner(op_list):
                         merge_groups[g].append(op)
 
                         dg = nx.contracted_nodes(dg, g, op, self_loops=False)
-                        trans = nx.contracted_nodes(trans, g, op, self_loops=False)
+                        # trans = nx.contracted_nodes(trans, g, op, self_loops=False)
 
                         break
                 else:
